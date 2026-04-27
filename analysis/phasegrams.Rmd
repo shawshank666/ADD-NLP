@@ -1,0 +1,275 @@
+---
+title: 'Phasegrams'
+author: "Andrey Anikin"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    fig_width: 8
+    fig_height: 6
+---
+
+```{r echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r}
+library(soundgen)
+library(nonlinearTseries)
+library(seewave)
+```
+
+
+# Phase space
+
+## Plotting signal against its delayed version
+
+A phase space represents the evolution of system parameters over time. As an approximation, we can plot the signal against its delayed version. The delay is best chosen so as to decorrelate the signal and its delayed version - thus, we can pick the time corresponding to a minimum of the autocorrelation function or mutual information.
+
+Here is a 440 Hz pure tone 250 ms in duration sampled at 16000 points/s:
+
+```{r}
+s1 = sin(2 * pi * 440 * (1:4000) / 16000)
+osc(s1)
+```
+
+If we plot it with a delay of just a few points, we get an oval stretched again the y = x line:
+
+```{r}
+time.lag = 1
+plot(s1[1:1000], s1[(1:1000) + time.lag], type = 'l')
+```
+
+The period is 16000/440 ~= 36 points. A good delay reducing correlation is pi/2, so period/4, in this case ~9 steps:
+
+```{r}
+time.lag = 9
+par(mfrow = c(1, 2))
+plot(s1[1:100], type = 'l')
+points(s1[(1:100) + time.lag], type = 'l', col = 'blue')
+plot(s1[1:1000], s1[(1:1000) + time.lag], type = 'l')
+```
+
+Note that half a period produces a correlation of -1, which we don't want:
+
+```{r}
+time.lag = 18
+par(mfrow = c(1, 2))
+plot(s1[1:100], type = 'l')
+points(s1[(1:100) + time.lag], type = 'l', col = 'blue')
+plot(s1[1:1000], s1[(1:1000) + time.lag], type = 'l')
+```
+
+Instead of picking the delay manually, we can use the autocorrelation function...
+
+```{r}
+time.lag = nonlinearTseries::timeLag(
+  s1, technique = 'acf', 
+  selection.method = 'first.zero', do.plot = TRUE)
+time.lag
+```
+
+...or mutual information
+
+```{r}
+time.lag = nonlinearTseries::timeLag(
+  s1, technique = 'ami', 
+  selection.method = 'first.minimum', do.plot = TRUE)
+time.lag
+```
+
+
+## Using the Hilbert transform
+
+An alternative to plotting the signal against its time-delayed version, we can use the Hilbert transform, which rotates all frequency components by ±pi/2 - exactly what we want to decorrelate the two signals. The magnitude of the complex transform returned by seewave::hilbert() is the analytic signal (envelope), and the plot of the real vs imaginary components gives us a good approximation of the phase space:
+
+```{r}
+par(mfrow = c(1, 2))
+h = seewave::hilbert(s1[1:1000], 16000)
+plot(abs(h), type = 'l', main = 'Envelope')
+plot(h, type = 'l', main = 'Phase space')
+```
+
+# Phase space of sounds with NLP
+
+We have already seen that a pure tone produces a simple "ring" (limit cycle) in the phase space. Here are phase portraits of some other sounds.
+
+## A steady tone with multiple harmonics
+
+```{r}
+s2 = soundgen(sylLen = 150, pitch = 440, rolloff = -15, formants = NA, 
+              addSilence = 0, attackLen = 1, temperature = 0, plot = TRUE)
+
+```
+
+Phase space with the Hilbert transform (still a limit cycle):
+
+```{r}
+h2 = hilbert(s2, 16000)
+plot(h2, type = 'l')
+```
+
+## A harmonic tone with variable f0
+
+
+```{r}
+s3 = soundgen(sylLen = 150, pitch = c(220, 440), rolloff = -15, formants = NA, 
+              addSilence = 0, attackLen = 1, temperature = 0, plot = TRUE, ylim = c(0, 2))
+h3 = hilbert(s3, 16000)
+plot(h3, type = 'l')
+
+```
+
+Why have we lost the limit cycle? Because the signal is no longer stationary!
+
+
+## Steady tone with constant f0 and vibrato
+
+```{r}
+s4 = soundgen(sylLen = 500, pitch = 440, rolloff = -15, formants = NA, 
+              vibratoFreq = 20, vibratoDep = 2,
+              addSilence = 0, attackLen = 1, temperature = 0, 
+              plot = TRUE, ylim = c(0, 2), windowLength = 25)
+h4 = hilbert(s4, 16000)
+plot(h4, type = 'l')
+
+```
+
+Again, we have a torus.
+
+
+## Steady tone with constant f0 and AM
+
+```{r}
+s5 = soundgen(sylLen = 500, pitch = 440, rolloff = -15, formants = NA, 
+              amFreq = 20, amDep = 50,
+              addSilence = 0, attackLen = 1, temperature = 0, 
+              plot = TRUE, ylim = c(0, 2), windowLength = 25, heights = c(1, 1))
+s5 = s5[500:7000] # cut the non-stationary fade in/out
+h5 = hilbert(s5, 16000)
+plot(h5, type = 'l')
+
+```
+
+Again, we have a torus.
+
+
+## Subharmonics
+
+```{r}
+s6 = soundgen(sylLen = 500, pitch = 440, rolloff = -15, formants = NA, 
+              subRatio = 2, subDep = 30,
+              addSilence = 0, attackLen = 1, temperature = 0, 
+              plot = TRUE, ylim = c(0, 2), windowLength = 25, heights = c(1, 1))
+s6 = s6[500:7000]
+h6 = hilbert(s6, 16000)
+plot(h6, type = 'l')
+
+```
+
+
+## Two independent harmonic series (biphonation)
+
+The two frequencies are 440 Hz and 515 Hz, and we just add them up without any fancy interactions:
+
+```{r}
+s7_1 = soundgen(sylLen = 500, pitch = 440, rolloff = -15, formants = NA, 
+                addSilence = 0, attackLen = 1, temperature = 0)
+s7_2 = soundgen(sylLen = 500, pitch = 515, rolloff = -15, formants = NA, 
+                addSilence = 0, attackLen = 1, temperature = 0)
+s7 = s7_1[500:7000] + s7_2[500:7000]
+spectrogram(s7, ylim = c(0, 2), windowLength = 150)
+# playme(s7, 16000)  # inharmonic, like a car honking
+h7 = hilbert(s7, 16000)
+plot(h7, type = 'l')
+```
+
+Compare what happens if the two frequencies form a rational ratio, eg 5/4:
+
+```{r}
+s8_1 = soundgen(sylLen = 500, pitch = 440, rolloff = -15, formants = NA, 
+                addSilence = 0, attackLen = 1, temperature = 0)
+s8_2 = soundgen(sylLen = 500, pitch = 550, rolloff = -15, formants = NA, 
+                addSilence = 0, attackLen = 1, temperature = 0)
+s8 = s8_1[500:7000] + s8_2[500:7000]
+spectrogram(s8, ylim = c(0, 2), windowLength = 150)
+# playme(s8, 16000)
+h8 = hilbert(s8, 16000)
+plot(h8, type = 'l')
+
+```
+
+We're basically back to the situation with subharmonics: the signal eventually repeats itself after a few loops through the phase space.
+
+## Chaos
+
+```{r}
+s9 = nonlinearTseries::logisticMap(r = 3.7, n.sample = 4000)
+s9 = soundgen:::zeroOne(s9) * 2 - 1
+spectrogram(s9, 16000, heights = c(1, 1))
+# playme(s9)
+```
+
+This time series looks and sounds like white noise. However, its phase space does have some visible structure:
+
+```{r}
+h9 = hilbert(s9, 16000)
+plot(h9[1:2000], type = 'l')
+```
+
+Or, using the delay method:
+
+```{r}
+time.lag = nonlinearTseries::timeLag(
+  s1, technique = 'ami', 
+  selection.method = 'first.minimum', do.plot = TRUE)
+plot(s9[1:2000], s9[(1:2000) + time.lag], type = 'l')
+```
+
+## Noise
+
+Gaussian white noise:
+
+```{r}
+s10 = rnorm(4000)
+spectrogram(s10, 16000, heights = c(1, 1))
+h10 = hilbert(s10, 16000)
+plot(h10[1:2000], type = 'l')
+```
+
+
+
+# Phasegram
+
+A phasegram is a collection of Poincare sections cut through phase portraits of consecutive audio frames. For a gentle introduction to this technique, see Herbst, C. T., Herzel, H., Švec, J. G., Wyman, M. T., & Fitch, W. T. (2013). Visualization of system dynamics using phasegrams. Journal of the Royal Society Interface, 10(85), 20130288. 
+
+R implementation:
+
+```{r}
+target = soundgen(sylLen = 1200, pitch = c(350, 420, 420, 410, 340) * 3,
+                  subDep = c(0, 0, 60, 50, 0, 0) / 2, addSilence = 0, plot = TRUE)
+ph = phasegram(target, 16000, windowLength = 20, step = 20,
+               nonlinStats = NULL, # to speed things up - plot only
+               rasterize = TRUE, bw = .01, bins = 150)
+```
+Here we see a textbook-perfect bifurcation of Poincare sections from a single limit cycle to two (so with four intersections) during the episode of subharmonics. With real-life audio, which can be have some reverb and noise, the results tend to be a lot less pretty. For instance:
+
+```{r}
+target = 'ex_audio/213_ut_fear_29-f-scream.wav'
+phasegram(target,
+          windowLength = 3, # a few f0 periods
+          rasterize = FALSE, nonlinStats = NULL
+)
+```
+
+The tonal part around 400-500 ms is distinct because the signal is nearly periodic, producing a "clean" phase portrait. In contrast, we have AM after 600 ms and then period doubling after 800 ms.
+
+A rasterized version with lower resolution:
+
+```{r}
+phasegram(target,
+          windowLength = 15, 
+          rasterize = TRUE, bw = .05,
+          nonlinStats = NULL
+)
+```
+```

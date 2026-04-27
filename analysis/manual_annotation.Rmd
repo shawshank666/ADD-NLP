@@ -1,0 +1,171 @@
+---
+title: 'Checking inter-rater reliability of manual NLP annotation'
+author: "Andrey Anikin"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    fig_width: 8
+    fig_height: 6
+    code_folding: show
+---
+
+```{r echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r echo=FALSE}
+library(soundgen)
+library(ggplot2)
+```
+
+The objective is to test how far expert raters agree about which NLP are present where in a sample of human speech, nonverbal vocalizations, and singing. 23 recordings were selected at random from a larger corpus (Anikin et al. 2023 "Beyond speech: exploring diversity in the human vocal space" iScience 26 (11): 108204). All 23 recordings were considered to contain NLP in the original publication; here we compare NLP annotations provided by 10 expert raters.
+
+## Load all annotations
+
+```{r}
+ann = read.csv('../data/annot_anon.csv', stringsAsFactors = TRUE)
+length(unique(ann$file))
+table(ann$rater, ann$label)
+```
+
+Thus, we have 4 NLP types annotated in 23 recordings (2 to 10 s in duration) by `r length(unique(ann$rater))` human raters.
+
+
+## Plot all annotations
+```{r fig.width=12, fig.height=12, class.source = 'fold-hide'}
+# png('../pix/annot_anon.png', width = 25, height = 30, units = 'cm', res = 300)
+colors = list(
+  'Frequency jump' = 'black',
+  'Subharmonics' = 'blue',
+  'Sidebands' = 'green',
+  'Chaos' = 'red'
+)
+raters = as.character(unique(ann$rater))
+nRaters = length(unique(ann$rater))
+
+par(mfrow = c(6, 4), mar = c(2, 2, 4, 2))
+for (file in unique(ann$file)) {
+  temp = ann[ann$file == file, ]
+  dur = temp$dur[1]
+  # sort by NLP so arrows (FJ's) come last, over the segments
+  temp = rbind(temp[temp$label != 'Frequency jump', ],
+               temp[temp$label == 'Frequency jump', ])
+  # par(mfrow = c(nRaters, 1))
+  plot(0, 0, type = 'n', xlab = '', ylab = '', yaxt = 'n', bty = 'n', xlim = c(0, dur), ylim = c(0, nRaters + 1), main = file, cex.main = 0.5, cex.axis = .75)
+  for (r in 1:nRaters) {
+    rater = raters[r]
+    temp2 = temp[temp$rater == rater, ]
+    if (nrow(temp2) > 0) {
+      for (a in 1:nrow(temp2)) {
+        if (temp2$label[a] == 'Frequency jump') {
+          arrows(x0 =  temp2$from[a], x1 =  temp2$from[a],
+                 y0 = r + .6, y1 = r,
+                 lwd = 2, length = .03)
+        } else {
+          segments(x0 = temp2$from[a], x1 = temp2$to[a],
+                   y0 = r, y1 = r, col = colors[[temp2$label[a]]], lwd = 3)
+        }
+      }
+    }
+  }
+}
+# legend
+plot(c(0, 5), c(0.5, 5.5), type = 'n', xlab = '', ylab = '', bty = 'n', xaxt = 'n', yaxt = 'n')
+for (i in 1:length(colors)) {
+  segments(x0 = 0, x1 = 2.5, y0 = i, y1 = i, col = colors[[i]], lwd = 10)
+  text(5, i, label = names(colors)[i], adj = 1)
+}
+arrows(x0 = 0, x1 =  0, y0 = 5.5, y1 = 4.5, lwd = 2, length = .03)
+text(5, 5, label = 'Frequency jump', adj = 1)
+par(mfrow = c(1, 1))
+# dev.off()
+```
+
+
+## Calculate concordance
+
+```{r class.source = 'fold-hide'}
+# status per 100 ms frame
+step = .1
+cc_type = cc_onoff = NULL
+for (file in unique(ann$file)) {
+  dur = ann$dur[ann$file == file] [1]
+  temp_type = temp_onoff = as.data.frame(list(frame = 1:(dur / step), file = file))
+  temp_type[, raters] = 'tonal'
+  temp_onoff[, raters] = FALSE
+  for (r in raters) {
+    # any NLP with non-zero duration (ie all except frequency jumps)
+    temp2 = ann[ann$file == file & ann$rater == r & ann$label != 'Frequency jump', ]
+    if (nrow(temp2) > 0) {
+      for (i in 1:nrow(temp2)) {
+        idx = as.numeric(round(temp2[i, c('from', 'to')] / step))
+        temp_type[idx[1]:idx[2], r] = temp2$label[i]
+        temp_onoff[idx[1]:idx[2], r] = TRUE
+      }
+    }
+  }
+  cc_type = rbind(cc_type, temp_type)
+  cc_onoff = rbind(cc_onoff, temp_onoff)
+}
+
+## average agreement between pairs of raters about NLP on/off
+# all possible pairs of raters
+pairs = expand.grid(raters, raters, stringsAsFactors = FALSE)
+pairs = pairs[pairs[1] != pairs[2], ]
+unique_pairs = idx_exclude = NULL
+for (i in 1:nrow(pairs)) {
+  pair_i = paste0(pairs[i, ], collapse = '_')
+  pair_i_rev = paste0(rev(pairs[i, ]), collapse = '_')
+  if (pair_i %in% unique_pairs | pair_i_rev %in% unique_pairs) {
+    idx_exclude = c(idx_exclude, i)
+  } else {
+    unique_pairs = c(unique_pairs, pair_i)
+  }
+}
+pairs = pairs[-idx_exclude, ]
+
+for (i in 1:nrow(pairs)) {
+  r1 = pairs$Var1[i]
+  r2 = pairs$Var2[i]
+  pairs$cor_onoff[i] = mean(c(
+    mean(aggregate( (cc_onoff[, r1] == cc_onoff[, r2]) ~ cc_onoff[, r1], cc_onoff, mean)[, 2]),
+    mean(aggregate( (cc_onoff[, r1] == cc_onoff[, r2]) ~ cc_onoff[, r2], cc_onoff, mean)[, 2])
+  ))
+  pairs$cor_type[i] = mean(c(
+    mean(aggregate( (cc_type[, r1] == cc_type[, r2]) ~ cc_type[, r1], cc_type, mean)[, 2]),
+    mean(aggregate( (cc_type[, r1] == cc_type[, r2]) ~ cc_type[, r2], cc_type, mean)[, 2])
+  ))
+}
+
+## Frequency jumps
+tol_ms = 100  # considered the same if within ±50 ms
+for (i in 1:nrow(pairs)) {
+  r1 = pairs$Var1[i]
+  r2 = pairs$Var2[i]
+  ann_i = ann[ann$rater %in% c(r1, r2) & ann$label == 'Frequency jump', ]
+  ann_i$match = FALSE
+  # ann_i = ann_i[order(ann_i$file), ]
+  if (length(unique(ann_i$rater)) < 2) {
+    # one rater didn't annotate any FJ's
+    pairs$fj[i] = 0
+  } else {
+    for (r in 1:nrow(ann_i)) {
+      idx = which(ann_i$file == ann_i$file[r] & 
+                    ann_i$rater != ann_i$rater[r] &
+                    abs(ann_i$from - ann_i$from[r]) * 1000 < tol_ms)
+      if (length(idx) > 0) ann_i$match[r] = TRUE
+    }
+    pairs$fj[i] = mean(ann_i$match)
+  }
+}
+# pairs
+colMeans(pairs[, 3:5])
+```
+
+cor_noff: average agreement between pairs of raters regarding whether or not a 100-ms frame contains any continuous NLP (sidebands, subharmonics, or chaos)
+
+cor_type: average agreement between pairs of raters regarding the type of NLP (none / sidebands / subharmonics / chaos) in each 100-ms frame
+
+fj: average agreement between pairs of raters regarding the presence of a frequency jump within ±50 ms of an annotated one
+
+

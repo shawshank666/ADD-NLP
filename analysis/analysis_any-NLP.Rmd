@@ -1,0 +1,460 @@
+---
+title: 'NLP analysis: measuring spectral characteristics of synthetic sounds with vs without NLP'
+author: "Andrey Anikin"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    fig_width: 8
+    fig_height: 6
+    code_folding: show
+---
+
+```{r echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r echo=FALSE}
+library(soundgen)  # need >=2.7.0
+library(ggplot2)
+library(patchwork)
+```
+
+
+
+# Synthetic sounds
+
+## Procedure: 
+
+- generate a large number of sounds with or without NLP using soundgen()
+
+- run analyze() to extract spectral descriptives
+
+- compare the results for different types of NLP
+
+
+## Synthesis
+
+Now let's synthesize all these sounds and analyze them. Because this is time-consuming (~2.5 h), the results are saved on disk and loaded from file "analysis_any-NLP.RDS" if it exists.
+
+1000 short sounds are synthesized for each of the following categories: unvoiced (noise only, no harmonic component), purely tonal (no NLP), tonal with amplitude modulation, tonal with subharmonics, and tonal with chaos. The pitch of tonal sounds varies randomly between 100 and 600 Hz, the frequencies of the first four formants are chosen randomly within a range broadly corresponding to human vowels, and NLP-related settings vary randomly per category, as specified in the following code. All tonal sounds are mixed with Gaussian noise at a signal-to-noise ratio of 20 dB. The resulting synthetic sounds are then analyzed, a number of acoustic features are extracted, and the results compared with the true NLP category.
+
+```{r class.source = 'fold-hide'}
+data_file = '../data/analysis_any-NLP.RDS'
+# file.remove(data_file)
+if (file.exists(data_file)) {
+  res = readRDS(data_file)
+} else {
+  # Time required: ~25 min / 1000 synthesized and analyzed files
+  
+  # set up a dataframe containing our target values for the synthesis:
+  n_sounds_per_cat = 1000
+  out_unvoiced = data.frame(
+    pitch = rep(NA, n_sounds_per_cat),
+    amDep = 0, amFreq = 100,
+    subDep = 0, jitterDep = 0)
+  out_tonal = data.frame(
+    pitch = runif(n_sounds_per_cat, 100, 600),
+    amDep = 0, amFreq = 100,
+    subDep = 0, jitterDep = 0
+  )
+  out_am = data.frame(
+    pitch = runif(n_sounds_per_cat, 100, 600),
+    amDep = seq(25, 75, length.out = n_sounds_per_cat),
+    amFreq = runif(n_sounds_per_cat, 10, 200), 
+    subDep = 0, jitterDep = 0)
+  out_subh = data.frame(
+    pitch = runif(n_sounds_per_cat, 100, 600),
+    amDep = 0, amFreq = 100, jitterDep = 0,
+    subDep = runif(n_sounds_per_cat, 10, 50)                      )
+  out_chaos = data.frame(
+    pitch = runif(n_sounds_per_cat, 100, 600),
+    amDep = 0, amFreq = 100, subDep = 0,
+    jitterDep = runif(n_sounds_per_cat, .5, 3)
+  )
+  out = rbind(out_unvoiced, out_tonal, out_am, out_subh, out_chaos)
+  for (i in which(!is.na(out$pitch))) 
+    if (out$amFreq[i] > out$pitch[i] / 4) out$amFreq[i] = out$pitch[i] / 4
+  # summary(out)
+  
+  ## SYNTHESIS 
+  # takes about 5 min / 5000 iter 
+  # (assumes that plenty of RAM is available so we don't need to save to disk)
+  ln = 16000 * .3
+  noise = rnorm(ln)
+  SNR = 20
+  noise = noise / sqrt(mean(noise^2)) * 10 ^ (-SNR / 20)  # set noise RMS to -20 dB
+  n = nrow(out)
+  sounds = vector('list', n)
+  names(sounds) = paste0('sound', 1:n)
+  
+  time_start = proc.time()
+  for (i in 1:n) {
+    signal = suppressMessages(suppressWarnings(
+      soundgen(
+        sylLen = 300, # just long enough to have a few periods of even the slowest AM
+        attackLen = 10, 
+        ampl = rnorm(3, -10, 10), # some stochastic variation in amplitude
+        pitch = if (is.na(out$pitch[i])) NA else out$pitch[i],
+        amDep = out$amDep[i], # AM depth
+        amFreq = out$amFreq[i], # AM frequency
+        noise = if (is.na(out$pitch[i])) 0 else NULL,  # no noise at all here
+        subDep = out$subDep[i],  # subh - always at f0/2
+        jitterDep = out$jitterDep[i], # jitter ("chaos")
+        shimmerDep = out$jitterDep[i] * 5,  # shimmer
+        # stochastic filter with 4 formants roughly in the human range
+        formants = c(runif(1, 300, 800), 
+                     runif(1, 850, 1800), 
+                     runif(1, 1900, 3600), 
+                     runif(1, 3700, 4700)), 
+        addSilence = 10,  # pad with just 10 ms of silence
+        temperature = 1e-3 # very little random variation in control parameters
+      )
+    ))
+    # spectrogram(signal, 16000, ylim = c(0, 3))
+    signal = signal[1:ln]
+    signal = signal / sqrt(mean(signal^2))  # RMS normalization
+    sounds[[i]] = signal + noise
+    # spectrogram(sounds[[i]], 16000, ylim = c(0, 3))
+    # playme(sounds[[i]])
+    
+    reportTime(i, time_start, n)
+  }
+  
+  ## ANALYSIS  
+  # run analyze() - takes about 15 min / 5000 iter
+  pitchManual = vector('list', n)
+  names(pitchManual) = names(sounds)
+  for (i in 1:n) pitchManual[[i]] = list(pitch = out$pitch[i])
+  an = suppressMessages(suppressWarnings(analyze(
+    sounds, cores = 6, 
+    samplingRate = 16000, 
+    windowLength = 50, step = 25,  
+    pitchManual = pitchManual,  # tell analyze() what f0 is
+    # settings for roughness analysis (via STFT spectrograms)
+    roughness = list(msType = '1D',
+                     windowLength = 25,
+                     step = 0.25,
+                     amRes = NULL, # a single value for the entire sound
+                     roughRange = NULL,
+                     roughMean = 100,
+                     roughSD = 8),
+    # this controls AM analysis from the amplitude envelope; the amount of
+    # smoothing depends on the lowest analyzed AM frequency (here 20 Hz)
+    amRange = c(20, 150),
+    # skip some other analyses to save time
+    formants = 0, novelty = NULL, loudness = NULL, 
+    summaryFun = c('median')
+  )))
+  # plot(an$summary$pitch_median, out$pitch)  # should be identical
+  
+  # run phasegram() - takes ~2 h / 5000 iter
+  ph = suppressMessages(suppressWarnings(phasegram(
+    sounds, samplingRate = 16000, cores = 6, 
+    windowLength = 25, bins = 20, plot = FALSE
+  )))
+  
+  # save the descriptives we want
+  add_vars_analyze = c('amEnvDep', 'amMsPurity', 'CPP', 'entropy', 'entropySh', 'harmEnergy', 'harmHeight', 'HNR', 'roughness', 'subDep')
+  add_vars_phasegram = c('shannon', 'ed', 'd2', 'sur')
+  add_vars_out = c('pitch', 'amDep', 'subDep', 'jitterDep')
+  res = data.frame(file = names(sounds))
+  res[, add_vars_analyze] = an$summary[, paste0(add_vars_analyze, '_median')]
+  res[, add_vars_phasegram] = do.call(rbind, lapply(ph, function(x) {
+    apply(x$descriptives[, add_vars_phasegram], 2, median, na.rm = TRUE)
+  }))
+  res[, paste0('orig_', add_vars_out)] = out[, add_vars_out]
+  
+  res$nlp = 'None'
+  res$nlp[is.na(res$orig_pitch)] = 'Unvoiced'
+  res$nlp[res$orig_amDep > 0] = 'Sidebands'
+  res$nlp[res$orig_subDep > 0] = 'Subharmonics'
+  res$nlp[res$orig_jitterDep > 0] = 'Chaos'
+  
+  saveRDS(res, data_file)
+}
+```
+
+
+## Checking the results
+
+```{r class.source = 'fold-hide'}
+all_vars = c('amEnvDep', 'amMsPurity', 'CPP', 'entropy', 'entropySh', 'harmEnergy', 'harmHeight', 'HNR', 'roughness', 'subDep',
+             'shannon', 'ed', 'd2', 'sur')
+df_long = reshape2::melt(res[, c('nlp', all_vars)])
+df_long$nlp = factor(df_long$nlp, levels = rev(c('None', 'Subharmonics', 'Sidebands', 'Chaos', 'Unvoiced')))
+
+ggplot(df_long, aes(value, color = nlp)) +
+  geom_boxplot(outlier.size = .1) +
+  # coord_cartesian(xlim = quantile(df_long$value, probs = c(0.1, 0.9), na.rm = TRUE)) +
+  # geom_text(data = sumtab, aes(-Inf, Inf, label = paste0('R2 = ', round(r2, 2))), inherit.aes = FALSE, hjust = 0, vjust = 1, size = 3) +
+  facet_wrap(~variable, scales = 'free') +
+  scale_color_discrete(guide = guide_legend(reverse = TRUE)) +
+  xlab('') + ylab('') +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        legend.title = element_blank(),
+        legend.position = 'top')
+# ggsave('../pix/descr.png', width = 25, height = 18, units = 'cm', dpi = 600)
+```
+
+
+## Plot together with annotated real vocalizations
+
+In addition to synthetic sounds with known "ground truth" of NLP, we analyze 1518 recordings of human speech, nonverbal vocalizations, and singing with NLP manually annotated (from Anikin et al. 2023 "Beyond speech: exploring diversity in the human vocal space" iScience 26 (11): 108204).
+
+```{r class.source = 'fold-hide'}
+if (FALSE) {
+  # acoustic analysis
+  path_to_audio = '../sounds/beyond_speech'
+  sounds = list.files(path_to_audio, pattern = '.wav')  # 1518 recordings
+  if (!file.exists('../data/bs_analyze.RDS')) {
+    an_manual = analyze(  # 3.5 h
+      path_to_audio, pitchManual = '../data/pitch_manual_1745.csv', 
+      roughness = list(msType = '1D',
+                       windowLength = 25,
+                       step = 0.25,
+                       amRes = NULL, # a single value for the entire sound
+                       roughRange = NULL,
+                       roughMean = 100,
+                       roughSD = 8),
+      amRange = c(40, 150), 
+      # skip some other analyses to save time
+      formants = 0, novelty = NULL, loudness = NULL, 
+      silence = 0, cores = 4)
+    # saveRDS(an_manual, '../data/bs_analyze.RDS')
+    
+    an_autom = analyze(
+      path_to_audio, 
+      roughness = list(msType = '1D',
+                       windowLength = 25,
+                       step = 0.25,
+                       amRes = NULL, # a single value for the entire sound
+                       roughRange = NULL,
+                       roughMean = 100,
+                       roughSD = 8),
+      amRange = c(40, 150), 
+      # skip some other analyses to save time
+      formants = 0, novelty = NULL, loudness = NULL, 
+      silence = 0, cores = 4)
+    # saveRDS(an_autom, '../data/bs_analyze_autom.RDS')
+  } else {
+    an_manual = readRDS('../data/bs_analyze.RDS')
+    # an_manual = readRDS('../data/bs_analyze_autom.RDS')
+  }
+  
+  # View(an_manual$detailed[[1]] [which(an_manual$detailed[[1]]$voiced), ])
+  step = diff(an_manual$detailed[[1]]$time[1:2])
+  all_ann = read.csv('../data/nlp_manual.csv')
+  length(unique(all_ann$file))
+  txt_wo_txt = xfun::sans_ext(all_ann$file)
+  nlp_lbls = unique(all_ann$label)
+  
+  out = NULL
+  time_start = proc.time()
+  for (i in 1:length(sounds)) {  # 1:length(sounds)
+    f = sounds[i]
+    a = an_manual$detailed[[i]]
+    if (length(a) == 0) next
+    a[, nlp_lbls] = FALSE
+    
+    # get NLP annotations (don't care about pitch jumps for now)
+    nlp = all_ann[which(txt_wo_txt == xfun::sans_ext(f)), ]
+    if (nrow(nlp) > 0) { # there are some NLPs
+      # get the indices of frames with NLPs
+      nFrames = nrow(a)  # == floor(a$duration * 1000 / step)
+      # time stamps in analyze() start at (0 + step), so the first frame is 0-step ms
+      nlp$frame_start = round(nlp$from / step) + 1
+      nlp$frame_start[nlp$frame_start < 1] = 1
+      nlp$frame_end = round(nlp$to / step) + 1
+      nlp$frame_end[nlp$frame_end > nFrames] = nFrames
+      
+      # mark frames with NLPs in the output of analyze()
+      for (j in 1:nrow(nlp)) {
+        a[nlp$frame_start[j]:nlp$frame_end[j], nlp$label[j]] = TRUE
+      }
+    }
+    a = cbind(data.frame(file = f), a)
+    out = rbind(out, a)
+    reportTime(i = i, nIter = length(sounds), time_start = time_start)
+  }
+  
+  for (i in 1:nrow(out)) {
+    out$cat[i] = switch(substr(as.character(out$file[i]), 1, 4),
+                        'nonv' = 'Nonverbal',
+                        'sing' = 'Singing',
+                        'spee' = 'Speech')
+  } 
+  table(out$cat)
+  
+  ## add features from nonlinear time series analysis
+  # ph_all = phasegram(path_to_audio, windowLength = 25, bins = 20, plot = FALSE, cores = 4)  # 26 h!!!
+  # saveRDS(ph_all, '../data/phasegram.rds')
+  ph_all = readRDS('../data/phasegram.rds')
+  # colnames(ph_all[[1]]$descriptives)
+  vars_to_add = c('shannon', 'nPeaks', 'ed', 'd2', 'ml', 'sur')
+  nf = length(ph_all)
+  time_start = proc.time()
+  for (i in 1:nf) {
+    idx_out = which(out$file == names(ph_all)[i])
+    if (length(idx_out) > 0) {
+      m_i = ph_all[[i]]$descriptives[, vars_to_add]
+      out[idx_out, vars_to_add] = suppressWarnings(soundgen:::interpolMatrix(
+        m_i, nr = length(idx_out)))
+      reportTime(i, time_start, nf)
+    }
+  }
+  
+  saveRDS(out, '../data/bs_per_frame.RDS')
+  # saveRDS(out, '../data/bs_per_frame_autom.RDS')
+  
+  # total duration
+  tf = aggregate(duration ~ file, out, unique)
+  nrow(tf)  # 1518 files
+  sum(tf$duration) / 60 / 60  # total dur = 2 h
+}
+```
+
+A bit of formatting for neat plotting
+
+```{r class.source = 'fold-hide'}
+df = readRDS('../data/bs_per_frame.RDS')
+sumtab = as.data.frame(matrix(c(
+  'amEnvDep', 'AM from envelope',
+  'amMsPurity', 'AM from MS',
+  'CPP', 'CPP',
+  'entropy', 'Wiener entropy',
+  'entropySh', 'Shannon entropy',
+  'HNR', 'HNR',
+  'roughness', 'Roughness',
+  'subDep', 'SubDep',
+  'shannon', 'Poincare entropy',
+  # 'nPeaks', 'Poincare nPeaks',
+  'ed', 'Embedding dim',
+  'd2', 'Correlation dim D2',
+  # 'ml', 'Lyapunov exp',
+  'sur', 'Surrogate data'
+), ncol = 2, byrow = TRUE))
+colnames(sumtab) = c('orig', 'fmt')
+
+mean(df$ampl > .01) # 85%
+df = df[df$ampl > .01, ]
+nlp_vars = c('sh', 'c', 'sb', 'fry')
+df$nlp = as.character(apply(df[, nlp_vars], 1, function(x) nlp_vars[which(x)]))
+table(df$nlp)
+df$nlp[df$nlp %in% c('c', 'c("c", "sb")', 'c("sh", "c")')] = 'Chaos'
+df$nlp[df$nlp == 'c("sh", "sb")'] = 'Subharmonics'
+df$nlp[df$nlp == 'character(0)'] = 'None'
+df$nlp[df$nlp == 'fry'] = 'Vocal fry'
+df$nlp[df$nlp == 'sb'] = 'Sidebands'
+df$nlp[df$nlp == 'sh'] = 'Subharmonics'
+df = df[df$nlp != 'Vocal fry', c('nlp', 'cat', 'voiced', sumtab$orig)]
+df$nlp[!df$voiced] = 'Unvoiced'
+df$nlp = factor(df$nlp, levels = rev(c('None', 'Subharmonics', 'Sidebands', 'Chaos', 'Unvoiced')))
+
+table(df$nlp)
+```
+
+Merge with synthetic sounds
+
+```{r}
+res$cat = 'Synthetic'
+res$voiced = !is.na(res$orig_pitch)
+df = rbind(df, res[, colnames(df)])
+df$cat = factor(df$cat, levels = rev(c('Speech', 'Nonverbal', 'Singing', 'Synthetic')))
+```
+
+R2 per variable from simple linear regression
+
+```{r}
+for (i in 1:nrow(sumtab)) {
+  formula_i = as.formula(paste0(sumtab$orig[i], '~ nlp'))
+  # real
+  mod = lm(formula_i, data = df[df$voiced & df$cat != 'Synthetic', ])
+  sm = summary(mod)
+  sumtab$r2[i] = sm$r.squared
+  
+  # synthetic
+  mods = lm(formula_i, data = df[df$voiced& df$cat == 'Synthetic', ])
+  sms = summary(mods)
+  sumtab$r2_synth[i] = sms$r.squared
+}
+sumtab$fmt_synth = paste0(sumtab$fmt, '\n', round(sumtab$r2_synth * 100), '%')
+sumtab$fmt_real = paste0(sumtab$fmt, '\n', round(sumtab$r2 * 100), '%')
+df_long = reshape2::melt(df[, c('nlp', 'cat', sumtab$orig)])
+df_long$fmt_real = sumtab$fmt_real[match(df_long$variable, sumtab$orig)]
+df_long$fmt_synth = sumtab$fmt_synth[match(df_long$variable, sumtab$orig)]
+# remove extreme outliers (super low amMsPurity in some unvoiced frames) to make the plot easier to read
+df_long$value[df_long$variable == 'amMsPurity' & df_long$value < -50] = NA  
+```
+
+
+Order according to how much variance in a particular acoustic characteristic is explained by the presence of NLP in a VOICED frame (ignore voiceless). First for real sounds:
+
+```{r class.source = 'fold-hide'} 
+sumtab$fmt_real = factor(sumtab$fmt_real, levels = sumtab$fmt_real[order(sumtab$r2, decreasing = TRUE)])
+df_long$fmt_real = factor(df_long$fmt_real, levels = sumtab$fmt_real[order(sumtab$r2, decreasing = TRUE)])
+
+ggplot(df_long, aes(value, cat, color = nlp)) +
+  geom_boxplot(outlier.size = .1) +
+  # coord_cartesian(xlim = quantile(df_long$value, probs = c(0.1, 0.9), na.rm = TRUE)) +
+  # geom_text(data = sumtab, aes(-Inf, Inf, label = paste0('R2 = ', round(r2, 2))), inherit.aes = FALSE, hjust = 0, vjust = 1, size = 3) +
+  facet_wrap(~fmt_real, scales = 'free') +
+  scale_color_discrete(guide = guide_legend(reverse = TRUE)) +
+  xlab('') + ylab('') +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        legend.title = element_blank(),
+        legend.position = 'top')
+# ggsave('../pix/descr_order_real.png', width = 25, height = 18, units = 'cm', dpi = 600)
+```
+
+Then for synthetic sounds:
+
+```{r class.source = 'fold-hide'}
+sumtab$fmt_synth = factor(sumtab$fmt_synth, levels = sumtab$fmt_synth[order(sumtab$r2_synth, decreasing = TRUE)])
+df_long$fmt_synth = factor(df_long$fmt_synth, levels = sumtab$fmt_synth[order(sumtab$r2_synth, decreasing = TRUE)])
+
+ggplot(df_long, aes(value, cat, color = nlp)) +
+  geom_boxplot(outlier.size = .1) +
+  # coord_cartesian(xlim = quantile(df_long$value, probs = c(0.1, 0.9), na.rm = TRUE)) +
+  # geom_text(data = sumtab, aes(-Inf, Inf, label = paste0('R2 = ', round(r2, 2))), inherit.aes = FALSE, hjust = 0, vjust = 1, size = 3) +
+  facet_wrap(~fmt_synth, scales = 'free') +
+  scale_color_discrete(guide = guide_legend(reverse = TRUE)) +
+  xlab('') + ylab('') +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        legend.title = element_blank(),
+        legend.position = 'top')
+# ggsave('../pix/descr_order_synth.png', width = 25, height = 18, units = 'cm', dpi = 600)
+```
+
+Or a combination (show %variance explained for both, order by real)
+
+```{r class.source = 'fold-hide'}
+sumtab = sumtab[order(sumtab$r2, decreasing = TRUE), ]
+sumtab$fmt_both = paste0(sumtab$fmt, '\n', round(sumtab$r2 * 100), '%', ' / ', round(sumtab$r2_synth * 100), '%')
+sumtab$fmt_both = factor(sumtab$fmt_both, levels = sumtab$fmt_both)
+df_long$fmt_both = sumtab$fmt_both[match(df_long$variable, sumtab$orig)]
+df_long$fmt_both = factor(df_long$fmt_both, levels = sumtab$fmt_both[order(sumtab$r2, decreasing = TRUE)])
+
+ggplot(df_long, aes(value, cat, color = nlp)) +
+  geom_boxplot(outlier.size = .1) +
+  # coord_cartesian(xlim = quantile(df_long$value, probs = c(0.1, 0.9), na.rm = TRUE)) +
+  # geom_text(data = sumtab, aes(-Inf, Inf, label = paste0('R2 = ', round(r2, 2))), inherit.aes = FALSE, hjust = 0, vjust = 1, size = 3) +
+  facet_wrap(~fmt_both, scales = 'free') +
+  scale_color_discrete(guide = guide_legend(reverse = TRUE)) +
+  xlab('') + ylab('') +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        legend.title = element_blank(),
+        legend.position = 'top')
+# ggsave('../pix/descr.png', width = 25, height = 20, units = 'cm', dpi = 600)
+```
+
+
+## Conclusion
+
+The final plot above presents the distribution of the values of several acoustic features, often used for quantifying nonlinear phenomena in the voice, across synthetic sounds and frames of actual human recordings depending on the presence of NLP (known in synthetic sounds, manually annotated in recordings). The title of each panel shows the name of acoustic feature (e.g., CPP = Cepstral Peak Prominence) and the amount of variance of this feature explained by NLP type, first in synthetic sounds and then in recordings (looking only at voiced frames). For example, NLP type explains 12% of CPP variance in recordings and 41% in synthetic sounds.
+
+The first obvious result is that many acoustic features explain much more variance in synthetic vs. real vocalizations, especially HNR (66% vs. 3%), amplitude modulation depth (AM) measured from the amplitude envelope or from the modulation spectrum, etc. The measures most consistently affected by NLP in real vocalizations are CPP and roughness. Among the measures from nonlinear time series analysis, correlation dimension D2 is the most consistent indicator of NLP, with 5 to 6% of its variance explained by NLP type.
+

@@ -1,0 +1,82 @@
+---
+title: 'NLP analysis: visualization'
+author: "Andrey Anikin"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    fig_width: 8
+    fig_height: 6
+---
+
+```{r echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+This vignette demonstrates different ways to visualize a sound with R code for doing so (not including methods of nonlinear time series analysis, which are covered in vignettet "phasegrams"). Our target recording is that of a woman screaming:
+
+```{r echo=FALSE}
+library(soundgen)
+target = 'ex_audio/213_ut_fear_29-f-scream.wav'
+```
+
+<audio controls> <source src="ex_audio/213_ut_fear_29-f-scream.wav"> </audio>
+
+
+## Spectrogram
+
+The most common way to visualize a sound is to show its spectrogram, often together with the oscillogram:
+
+```{r fig.width=8}
+spectrogram(target,
+            windowLength = 10,
+            step = 5,
+            osc = 'dB',  # plot oscillogram in dB
+            heights = c(2, 1),  # spectro/osc height ratio
+            contrast = .4,  # increase contrast
+            brightness = -.2,  # reduce brightness
+            # colorTheme = 'heat.colors',  # pick color theme
+            yScale = 'mel',  # mel-frequency scale (~logarithmic for higher frequencies)
+            main = 'Mel-spectrogram' # title
+            # + axis labels, etc
+)
+```
+
+The most important argument is "windowLength" as it determines the tradeoff between time resolution and frequency resolution. A short analysis window shows rapid temporal changes, but at the expense of low frequency resolution. Compare:
+
+```{r}
+spectrogram(target, windowLength = 3, main = 'Broadband')
+spectrogram(target, windowLength = 100, main = 'Narrowband')
+```
+
+There are different computational tricks for mitigating the time-frequency tradeoff. For example, it is possible to have different time resolution for different frequency bins by using the wavelet transform or simply a bank of bandpass filters, as in soundgen::audSpectrogram():
+
+```{r fig.width=8}
+audSpectrogram(target, nFilters = 64, ylim = c(0.5, Inf), main = 'Auditory spectrogram')
+# basically, a narrow-band spectrogram in low frequencies and broad-band in high frequencies
+```
+
+Another type of spectrogram that is very nice for special cases like very rapid frequency sweeps in bird songs is the time-frequency reassigned spectrogram:
+
+```{r}
+spectrogram(target, specType = 'reassigned', windowLength = 2, step = 1, 
+            yScale = 'mel', ylim = c(0.1, Inf), main = 'Reassigned spectrogram')
+```
+
+## Modulation (power) spectrum
+
+Modulation spectrum is a two-dimensional Fourier transform of the spectrogram. A good reference is Singh, N. C., & Theunissen, F. E. (2003). Modulation spectra of natural sounds and ethological theories of auditory processing. The Journal of the Acoustical Society of America, 114(6), 3394-3411. In R, it can be obtained with soundgen::modulationSpectrum():
+
+```{r}
+ms = modulationSpectrum(target, windowLength = 10, step = 2, 
+                        main = 'Modulation spectrum')
+# see ?modulationSpectrum for more information
+```
+
+Notice the peak of temporal modulation around 70 Hz, indicating AM at that frequency. Looking over time, we do 
+
+```{r}
+ms$summary$amMsFreq_median  # typical AM frequency
+plot(ms$amMsFreq, cex = ms$amMsPurity^2/200, type = 'b') # change over time
+```
+
+See also: phasegrams.html

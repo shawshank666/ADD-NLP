@@ -1,0 +1,245 @@
+---
+title: 'NLP analysis: detecting frequency jumps'
+author: "Andrey Anikin"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    fig_width: 8
+    fig_height: 6
+    code_folding: show
+---
+
+```{r echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r echo=FALSE}
+library(soundgen)
+library(ggplot2)
+```
+
+
+# A single synthetic sound
+
+Here is what happens when pitch tracking is imperfect - we think there are two extra frequency jumps:
+
+```{r}
+# png('../pix/pitchJump_validate_ex_spec.png', width = 15, height = 12, units = 'cm', res = 600)
+detectNLP('../sounds/beyond_speech/nonverbal_cry_F_482_ut_sad-cry_34-f.wav', 
+          plot = TRUE, ylim = c(0, 3))
+# dev.off()
+```
+
+ Or, to make everything look neat & nice with correct pitch tracking:
+ 
+```{r}
+detectNLP('../sounds/beyond_speech/nonverbal_cry_F_482_ut_sad-cry_34-f.wav', 
+          pitchManual = '../data/pitch_manual_1745.csv',
+          plot = TRUE, ylim = c(0, 3))
+```
+ 
+
+
+# Optimization
+
+Optimize based on manually annotated pitch jumps in 1518 human vocalizations
+
+## Preparation
+
+First we load the results of acoustic analysis and annotated pitch jumps in these 1518 vocalizations.
+
+```{r class.source = 'fold-hide'}
+df = readRDS('../data/bs_per_frame.RDS')
+# or w/o manual pitch tracking:
+# df = readRDS('../data/bs_per_frame_autom.RDS')
+
+## optimize the detection of pitch jumps
+table(df$fj)
+step = df$time[2] - df$time[1]
+# find the time of pitch jumps (upsampling put multiple frames together as pj)
+all_ann = read.csv('../data/nlp_manual.csv')
+all_ann = all_ann[all_ann$label == 'fj', ]
+nrow(all_ann)  # 130 freq jumps
+length(unique(all_ann$file))  # 65 recordings contain at least 1 freq jump
+```
+
+So we have 65 recordings with at least annotated one frequency jump, for a total of 130 jumps. Since these jumps are supposed to be instantaneous, let's recalculate their time as the mean of the annotated from-to times (duration in meaningless here - it's just an artifact of annotation).
+
+```{r}
+pjs = data.frame(file = all_ann$file, time = rowMeans(all_ann[, c('from', 'to')]))
+summary(pjs)
+```
+
+Now we need a function that detects frequency jumps automatically from f0 contours - that's soundgen:::findJumps - and compares the results with manual annotations. To make sure we strike a reasonable balance between seeing frequency jumps everywhere (a lot of false alarms) and being too conservative and missing real jumps (a lot of false negatives), F1-score is used as the accuracy metric.
+
+```{r class.source = 'fold-hide'}
+check_pj = function(jumpThres = 14, jumpWindow = 100, tol_ms = 50, plot = FALSE) {
+  files = unique(df$file)
+  out = data.frame(file = files, n_manual = 0, n_found = 0, TP = 0, FP = 0)
+  for (i in 1:length(files)) {
+    f = files[i]
+    idx_i = which(df$file == f)
+    pj_i = soundgen:::findJumps(pitch = df$pitch[idx_i], step = step, 
+                                jumpThres = jumpThres, jumpWindow = jumpWindow)
+    time_pj_i = which(pj_i) * step - step/2
+    n_pj_i = length(time_pj_i)
+    out$n_found[i] = n_pj_i
+    if (f %in% pjs$file) {
+      # there are some manually annotated pitch jumps in this file
+      times_true = pjs$time[which(pjs$file == f)]
+      out$n_manual[i] = length(times_true)
+      if (n_pj_i > 0) {
+        # we found some pitch jumps
+        # true positives: correctly detected pj's within tol_ms
+        out$TP[i] = sum(apply(as.matrix(times_true), 1, function(x) any(abs(x - time_pj_i) <= tol_ms)))
+        # false positives
+        out$FP[i] = sum(apply(as.matrix(time_pj_i), 1, function(x) !any(abs(x - times_true) <= tol_ms)))
+      } else {
+        # we didn't find any pitch jumps, but there are in fact some
+        out$TP[i] = 0
+        out$FP[i] = 0
+      }
+    } else {
+      # there are no manually annotated pitch jumps in this file
+      times_true = numeric(0)
+      if (n_pj_i > 0) {
+        # we have hallucinated some pitch jumps where there are none
+        out$TP[i] = 0
+        out$FP[i] = n_pj_i
+      } else {
+        # no jumps present, none found
+        out$TP[i] = 0
+        out$FP[i] = 0
+      }
+    }
+    
+    if (plot & ((n_pj_i > 0) | (length(times_true) > 0))) {
+      plot(step * (1:length(df$pitch[idx_i])), df$pitch[idx_i], type = 'b', 
+           pch = 16, xlab = 'Time, ms', ylab = 'f0, Hz', main = f)
+      abline(v = times_true, lty = 2, col = 'blue')
+      y1 = min(df$pitch[idx_i], na.rm = TRUE) + diff(range(df$pitch[idx_i], na.rm = TRUE)) / 5
+      for (tj in time_pj_i) 
+        arrows(x0 = tj, x1 = tj, y0 = 0, y1 = y1, lwd = 2, length = .05, col = 'purple')
+      invisible(readline(prompt="Press [enter] to continue")) 
+    }
+  }
+  
+  # calculate F1-score
+  sums = colSums(out[, 2:5])
+  precision = as.numeric(sums['TP'] / sums['n_found'])
+  recall = as.numeric(sums['TP'] / sums['n_manual'])
+  F1 = 2 / (1/precision + 1/recall)
+  return(list(out = out, F1 = F1, precision = precision, recall = recall))
+}
+```
+
+Sanity checks - let's look at the distribution of TP/FP:
+
+```{r}
+temp = check_pj()
+temp$F1
+table(temp$out$TP, temp$out$FP)  # confusion matrix with default settings
+```
+
+
+We can plot f0 contours one by one and inspect the manually annotated / detected frequency jumps visually (not executed here):
+
+```{r eval=FALSE}
+check_pj(jumpThres = 20, jumpWindow = 200, plot = TRUE)
+```
+
+## Run optimization
+
+```{r class.source = 'fold-hide'}
+data_file = '../data/validate_pitchJump.RDS'
+if (file.exists(data_file)) {
+  out_pj = readRDS(data_file)
+} else {
+  out_pj = expand.grid(jumpThres = seq(.5, 24, .5),
+                       jumpWindow = seq(20, 300, 10))
+  n = nrow(out_pj)
+  time_start = proc.time()
+  for (i in 1:n) {
+    temp = check_pj(jumpThres = out_pj$jumpThres[i], 
+                    jumpWindow = out_pj$jumpWindow[i])
+    # summary(temp$out[temp$out$n_manual > 0, ])
+    out_pj[i, c('precision', 'recall', 'F1')] = temp[c('precision', 'recall', 'F1')]
+    reportTime(i, time_start, n)
+  }
+  saveRDS(out_pj, data_file)
+}
+summary(out_pj)
+```
+
+Plot the results:
+
+```{r}
+ggplot(out_pj, aes(jumpThres, jumpWindow, fill = F1)) + geom_tile()
+```
+
+Look at the settings that provide the best F1 / recall / precision:
+
+```{r}
+head(out_pj[order(out_pj$F1, decreasing = TRUE), ])
+head(out_pj[order(out_pj$precision, decreasing = TRUE), ])
+head(out_pj[order(out_pj$recall, decreasing = TRUE), ])
+```
+
+Clearly, we can have nearly perfect recall if we treat even minor changes in f0 as frequency jumps, but precision is poor regardless of the settings - we can't really tell apart manually flagged pitch jumps vs. other rapid changes in f0 from one STFT frame to the next.
+
+A nicer plot of optimization:
+
+```{r class.source = 'fold-hide'}
+d = reshape2::dcast(jumpThres ~ jumpWindow, data = out_pj, value.var = 'F1')
+rownames(d) = d[, 1]
+d = as.matrix(d[, -1])
+mycolors = rev(rainbow(100) [1:90])
+# png('../pix/pitchJump_validate.png', width = 15, height = 15, units = 'cm', res = 600)
+soundgen:::filled.contour.mod(
+  x = as.numeric(rownames(d)), 
+  y = as.numeric(colnames(d)), 
+  z = d, col = mycolors, nlevels = length(mycolors), 
+  xlab = 'jumpThres', ylab = 'jumpWindow'
+)
+# dev.off()
+```
+
+
+```{r eval=FALSE, echo=FALSE}
+# plot and save a legend
+png('../pix/pitchJump_validate_legend.png', width = 5, height = 11, units = 'cm', res = 600)
+nlevels = length(mycolors)
+zlim = range(d)
+levels = pretty(zlim, nlevels)
+plot.new()
+plot.window(xlim = c(0, 1), ylim = range(levels), xaxs = "i", yaxs = "i")
+rect(0, levels[-length(levels)], 1, levels[-1L], col = mycolors, border = NA)
+axis(4)
+# box()
+dev.off()
+```
+
+Final stats for a reasonable combination of parameters:
+
+```{r}
+# manual pitch tracking
+df = readRDS('../data/bs_per_frame.RDS')
+temp1 = check_pj(jumpThres = 20, jumpWindow = 100, tol_ms = 50)
+temp1$precision  # % of the found jumps that are true positives
+temp1$recall  # % of manually annotated pitch jumps that are successfully detected
+summary(temp1$out)  # mean n_found = 0.1
+```
+
+```{r}
+# automatic pitch tracking
+df = readRDS('../data/bs_per_frame_autom.RDS')
+temp2 = check_pj(jumpThres = 20, jumpWindow = 100, tol_ms = 50)
+temp2$precision  # % of the found jumps that are true positives
+temp2$recall  # % of manually annotated pitch jumps that are successfully detected
+summary(temp2$out)  # n_found is way too high: mean = 1.4 (b/c of errors in automatic pitch tracking)
+```
+
+
+# Summary
+
+We optimized the key parameters – the threshold rate of change (“jump threshold”) and the averaging window (“jump window”) – against manually annotated frequency jumps in our corpus of 1518 recordings of human nonverbal vocalizations, singing, and speech with manually verified fo contours, of which 65 recordings (8 speech samples and 57 nonverbal vocalizations) were judged to contain a total of 130 perceptually detectable frequency jumps 130 true positives is not much for formal optimization, and a simple grid search demonstrates that the best tested combination of control parameters (jump threshold = 19.5 octaves/s, jump window =  90 ms) achieves an F1-score of only 0.30, with a precision of 0.26 (proportion of manually annotated frequency jumps that are successfully detected) and a recall of 0.35 (proportion of detected frequency jumps that coincide with manual annotations).

@@ -1,0 +1,315 @@
+---
+title: 'NLP analysis: measuring AM'
+author: "Andrey Anikin"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    fig_width: 8
+    fig_height: 6
+    code_folding: show
+---
+
+```{r echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r echo=FALSE}
+library(soundgen)
+library(ggplot2)
+library(patchwork)
+```
+
+This vignette demonstrates the analysis of amplitude modulation (AM) with the function soundgen::analyze() using two approaches. The first is to work with a smoothed amplitude envelope, and the other with a modulation power spectrum.
+
+
+# A single synthetic sound
+
+As a simple demonstration, let us synthesize a 4-second sound with amplitude modulation whose frequency steadily increases from 25 to 85 Hz and depth varies gradually from 60% to 25% and back up to 50%.
+
+```{r}
+s = soundgen(sylLen = 4000,  # 4 s long
+             ampl = c(0, -20, 0),  # 20 dB quieter in the middle
+             pitch = c(200, 400, 300), # f0
+             amFreq = c(25, 85), # frequency of AM
+             amDep = c(60, 25, 50),  # depth of AM
+             addSilence = 0, plot = TRUE, ylim = c(0, 2))
+```
+
+Let us now analyze this sound with soundgen::analyze() and see if the detected AM frequency and depth are approximately correct. Here we use outputs called "amEnvFreq" and "amEnvDep", which correspond to AM parameters measured from the smoothed analytical amplitude envelope.
+
+```{r}
+an = analyze(s, 16000, silence = 0)
+
+par(mfrow = c(1, 2))
+plot(getSmoothContour(anchors = c(25, 85), len = nrow(an$detailed)), type = 'l', col = 'blue', xlab = 'STFT frame', ylab = 'AM frequency, Hz', main = 'AM frequency')
+points(an$detailed$amEnvFreq, type = 'b')
+
+plot(getSmoothContour(anchors = c(60, 25, 50), len = nrow(an$detailed)), type = 'l', col = 'blue', xlab = 'STFT frame', ylab = 'AM depth, %', main = 'AM depth')
+points(an$detailed$amEnvDep * 100, type = 'b')
+```
+
+The blue contours show the values actually used for synthesizing the sound. We can see that AM frequency is measured reasonably accurately, but with insufficient time resolution to follow the rapidly changing AM frequency of the original. AM depth is accurate in the middle part, but underestimated at the beginning and toward the end.
+
+
+
+# 10,000 synthetic sounds
+
+For a more systematic check, we synthesize a large number of synthetic sounds with known AM parameters, analyze them, and compare the results to the original settings used at the synthesis stage. Thus:
+
+- generate 10,000 sounds with known amDep and amFreq using soundgen()
+
+- run analyze() to measure apparent amDep and amFreq
+
+- compare with the actually used values
+
+
+## Control parameters
+
+Let's set up a dataframe containing our target values for the synthesis:
+
+```{r}
+n_sounds = 10000
+out = data.frame(
+  pitch = runif(n_sounds, 100, 600),  # f0 ranges from 100 to 600 Hz
+  amDep = seq(0, 1, length.out = n_sounds),  # AM depth ranges from 0 to 1
+  amFreq = runif(n_sounds, 10, 200),  # AM frequency ranges from 10 to 200 Hz
+  noise = runif(n_sounds, -60, 0),  # noise added at an SNR of 0 to 60 dB
+  amShape = runif(n_sounds, -1, 1)  # non-sinusoidal AM with varying "shape"
+)
+for (i in 1:nrow(out)) if (out$amFreq[i] > out$pitch[i] / 4) out$amFreq[i] = out$pitch[i] / 4
+add_vars = c('amMsFreq_median', 'amMsPurity_median', 'amEnvFreq_median', 'amEnvDep_median')
+out[, add_vars] = NA
+n = nrow(out)
+summary(out)
+```
+
+## Synthesis + analysis
+
+Now let's synthesize all these sounds and analyze them. Because this is time-consuming (~2.5 h), the results are saved on disk and loaded from file "validate_amDep.RDS" if it exists.
+
+```{r class.source = 'fold-hide'}
+data_file = '../data/validate_amDep.RDS'
+if (file.exists(data_file)) {
+  out = readRDS(data_file)
+} else {
+  time_start = proc.time()  # takes about 2.5 h
+  for (i in 1:n) {
+    s = suppressMessages(suppressWarnings(
+      soundgen(
+        sylLen = 300, # just long enough to have a few periods of even the slowest AM
+        addSilence = 0, attackLen = 10, 
+        ampl = rnorm(3, -10, 10), # some stochastic variation in amplitude
+        pitch = out$pitch[i] * rnorm(3, 1, .1), # f0 varies around the specified value
+        amDep = out$amDep[i] * 100, # AM depth: from proportion to %
+        amFreq = out$amFreq[i], # AM frequency
+        amShape = out$amShape[i],  # AM shape (≠just a sine wave)
+        noise = out$noise[i], 
+        # stochastic filter with 4 formants roughly in the human range
+        formants = c(runif(1, 300, 800), 
+                     runif(1, 850, 1800), 
+                     runif(1, 1900, 3600), 
+                     runif(1, 3700, 4700)), 
+        temperature = 1e-3 # very little random variation in control parameters
+      )
+    ))
+    # spectrogram(s, ylim = c(0, 3))
+    # playme(s)
+    an = analyze(
+      s, 
+      samplingRate = 16000, 
+      # STFT settings don't really matter much as AM analysis is determined by amRange
+      windowLength = 50, step = 25,  
+      # settings for AM analysis using the modulation spectrum; amRes = NULL
+      # means that we only need a single value for the entire sound, not frame
+      # by frame
+      roughness = list(windowLength = 15, step = 3, amRes = NULL),
+      # this controls AM analysis from the amplitude envelope; the amount of
+      # smoothing depends on the lowest analyzed AM frequency (here 20 Hz)
+      amRange = c(20, 150),
+      # skip other analyses to save time
+      formants = 0, novelty = NULL, loudness = NULL, 
+      summaryFun = c('median')
+    )
+    # an$detailed$amEnvDep
+    out[i, add_vars] = an$summary[, add_vars]
+    reportTime(i, time_start, n)
+  }
+  # are we within 1/4 octave of the true AM frequency?
+  out$idx_freqEnvOK = abs(log2(out$amFreq / out$amEnvFreq_median)) < .25
+  out$idx_freqEnvOK[is.na(out$idx_freqEnvOK)] = FALSE
+  # table(out$idx_freqEnvOK)
+  
+  out$idx_freqMsOK = abs(log2(out$amFreq / out$amMsFreq_median)) < .25
+  out$idx_freqMsOK[is.na(out$idx_freqMsOK)] = FALSE
+  # table(out$idx_freqMsOK)
+  
+  saveRDS(out, data_file)
+}
+```
+
+## Checking the results
+
+So now we have estimates of amDep and amFreq from two algorithms: STFT of smoothed amplitude envelope ('amEnvFreq_median', 'amEnvDep_median') and modulation spectrum ('amMsFreq_median', 'amMsPurity_median'):
+
+```{r}
+summary(out)
+```
+
+Overall correlation between real and measured amDep based on our two algorithms:
+
+```{r}
+cor(out$amDep, out$amEnvDep_median)
+cor(out$amDep, out$amMsPurity_median, use = 'complete.obs')
+```
+
+Same for amFreq:
+
+```{r}
+cor(out$amFreq, out$amEnvFreq_median)
+cor(out$amFreq, out$amMsFreq_median, use = 'complete.obs')
+```
+
+When amFreq is estimated more or less correctly (within 1/4 of an octave), amDep is also much more accurate:
+
+```{r}
+cor(out[out$idx_freqMsOK, c('amDep', 'amEnvDep_median', 'amMsPurity_median')], use = 'complete.obs')[, 1]
+```
+
+
+
+Error in amFreq estimation as a function of true amFreq:
+
+```{r class.source = 'fold-hide'}
+out$amEnvFreq_error = out$amEnvFreq_median - out$amFreq
+p1 = ggplot(out, aes(amFreq, amEnvFreq_error)) +
+  geom_point(size = .25, alpha = .25) +
+  geom_smooth() +
+  geom_abline(intercept = 0, slope = 0, linetype = 2, color = 'green', linewidth = 1) +
+  xlab('True AM frequency, Hz') + ylab('Measurement error, Hz') +
+  ggtitle('From envelope') +
+  theme_bw() 
+
+out$amMsFreq_error = out$amMsFreq_median - out$amFreq
+p2 = ggplot(out, aes(amFreq, amMsFreq_error)) +
+  geom_point(size = .25, alpha = .25) +
+  geom_smooth() +
+  geom_abline(intercept = 0, slope = 0, linetype = 2, color = 'green', linewidth = 1) +
+  xlab('True AM frequency, Hz') + ylab('Measurement error, Hz') +
+  ggtitle('From MS') +
+  theme_bw() 
+
+p1 + p2
+# ggsave('../pix/AM_validation_amFreq.png', width = 12, height = 6.5, units = 'cm', dpi = 600)
+
+
+
+```
+
+Error in amDep estimation as a function of the true amFreq:
+
+```{r class.source = 'fold-hide'}
+p3 = ggplot(out[out$idx_freqEnvOK, ], aes(amDep, amEnvDep_median)) +
+  geom_point(size = .25, alpha = .25) +
+  geom_abline(intercept = 0, slope = 1, linetype = 2, color = 'green', linewidth = 1) +
+  xlab('True AM depth') + ylab('Measured AM depth') +
+  ggtitle('From envelope') +
+  theme_bw()
+
+p4 = ggplot(out[out$idx_freqMsOK, ], aes(amDep, amMsPurity_median)) +
+  geom_point(size = .25, alpha = .25) +
+  geom_smooth() +
+  xlab('True AM depth') + ylab('Measured AM purity') +
+  ggtitle('From MS') +
+  theme_bw()
+
+p3 + p4
+```
+
+
+
+## Some extra plots
+
+amEnvDep is better for frequencies above 50 Hz:
+
+```{r class.source = 'fold-hide'}
+out$amFreq_int = cut(out$amFreq, breaks = 4)
+out$amEnvDep_error = out$amEnvDep_median - out$amDep
+ggplot(out, aes(amDep, amEnvDep_median)) +
+  geom_point() +
+  geom_smooth() +
+  geom_abline(intercept = 0, slope = 1, linetype = 2, color = 'green') +
+  facet_wrap(~amFreq_int) +
+  theme_bw()
+```
+
+amEnvDep: smaller error over 50 Hz:
+
+```{r class.source = 'fold-hide'}
+ggplot(out, aes(amFreq, amEnvDep_error)) +
+  geom_point() +
+  geom_smooth() +
+  theme_bw() 
+```
+
+amEnvDep: no effect of noise:
+
+```{r class.source = 'fold-hide'}
+ggplot(out, aes(noise, amEnvDep_error)) +
+  geom_point() +
+  geom_smooth() +
+  theme_bw() 
+```
+
+amEnvDep: smaller error for f0 over 150 Hz:
+
+```{r class.source = 'fold-hide'}
+ggplot(out, aes(pitch, amEnvDep_error)) +
+  geom_point() +
+  geom_smooth() +
+  theme_bw() 
+```
+
+Effect of amShape: a bit worse for negative (very sharp notches), esp. <-0.5 (esp. clear if looking at the cases when amFreq is detected correctly):
+
+```{r class.source = 'fold-hide'}
+ggplot(out, aes(amShape, amEnvDep_error)) +
+  geom_point() +
+  geom_smooth() +
+  theme_bw() 
+```
+
+
+## Conclusion: AM
+
+While neither of the two tested algorithms for AM analysis (analytic envelope and modulation spectrum) is perfect, both produce valid estimates of the frequency and depth of amplitude modulation over a wide range of conditions. Specifically, AM analysis based on the amplitude envelope requires an a priori specification of the analyzed frequency range (the "amRange" parameter passed to soundgen::analyze). Estimation becomes less accurate close to the lower limit of the specified frequency range, so it is good to be conservative and set a fairly low boundary for the analysis. The method based on a modulation power spectrum, on the other hand, is greatly affected by the method of producing a spectrogram (here, ordinary STFT, which means that the window length and step determine the frequency and time resolution of the resulting modulation spectrum). Both methods also produce reasonably accurate estimates of AM depth or "purity", are robust to background noise and shape of the modulating waveform, and can be combined to cover the widest possible range of AM varieties.
+
+
+
+# Analysis of perceptual roughness
+
+AM analysis is closely related to the estimation of perceptual roughness, which is an important psychoacoustic characteristic in the context of working with NLP. A popular method for estimating roughness is to obtain a modulation power spectrum and calculate its proportion in the "roughness" range of temporal modulation (e.g., Elliott & Theunissen 2009 "The modulation transfer function for speech intelligibility"; Arnal et al. 2015 "Human screams occupy a privileged niche in the communication soundscape"). 
+
+As a quick check of its perceptual validity, roughness estimates obtained from an ordinary STFT spectrogram converted to a modulation spectrum with soundgen::analyze() were compared with the listeners' ratings of perceptual roughness of 328 synthetic human vocalizations with and without NLP from Anikin et al. 2021 "Harsh is large: nonlinear vocal phenomena lower voice pitch and exaggerate body size". A dataset of aggregated (median) ratings per sound and roughness estimates is provided here:
+
+```{r}
+rough = read.csv('../data/roughness_harsh-is-large.csv')
+head(rough)
+```
+
+'sound' is the file name of each stimulus (available from the supplements to Anikin et al. 2021), 'response' is the median roughness rating per sound (on a scale ranging from 1 to 100), 'rough_MPS' is roughness estimated from a modulation spectrum (% of temporal modulation between 30 and 150 Hz) using the function soundgen::modulationSpectrum() with default settings (also available via soundgen::analyze) Finally, 'rough_audSpec' is roughness estimated from an auditory spectrogram (median roughness per channel, %) with the function soundgen::audSpectrogram() with default settings. The latter method is based on passing a sound through a bank of 128 bandpass filters with center frequencies equidistant on a bark scale, obtaining the log-analytical envelope of each channel using the Hilbert transform, taking its spectrum, discarding irrelevantly low frequencies, and calculating the mean of the resulting modulation spectrum per channel weighted by the density of a lognormal distribution peaking at 70 Hz with a standard deviation of 3 semitones (so as to give more weight to AM frequencies that sound rough to humans), as described in the documentation for the function soundgen::audSpectrogram(). The median roughness across all 128 channels is shown here.
+
+```{r class.source = 'fold-hide', fig.width=9, fig.height = 6}
+par(mfrow = c(1, 2))
+cor_mps = round(cor(rough$response, rough$rough_MPS), 2)
+plot(rough$response, rough$rough_MPS, main = paste('cor =', cor_mps), 
+     xlab = 'Perceptual ratings of roughness',
+     ylab = 'Roughness from MPS with soundgen::analyze()')
+cor_aud = round(cor(rough$response, rough$rough_audSpec), 2)
+plot(rough$response, rough$rough_audSpec, main = paste('cor =', cor_aud), 
+     xlab = 'Perceptual ratings of roughness',
+     ylab = 'Roughness from soundgen::audSpectrogram()')
+```
+
+## Conclusion: roughness
+
+There is currently no single, widely accepted "gold standard" for calculating the perceived roughness of complex acoustic stimuli. Roughness estimated per channel in an auditory spectrogram (vs. using a modulation spectrum of an ordinary STFT-based specrogram) achieves a noticeably better fit to human ratings of roughness based on this dataset and the tested implementation of the two algorithms.

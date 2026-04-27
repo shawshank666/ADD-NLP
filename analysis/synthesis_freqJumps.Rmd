@@ -1,0 +1,167 @@
+---
+title: 'NLP synthesis: manipulating frequency jumps'
+author: "Andrey Anikin"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    fig_width: 8
+    fig_height: 6
+---
+
+```{r echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r echo=FALSE}
+library(soundgen)
+```
+
+
+
+
+# Remove a pitch jump from a recording
+
+```{r}
+target = 'ex_audio/213_ut_fear_29-f-scream.wav'
+
+# png('../pix/pitchJump_manip_with.png', width = 15, height = 13, units = 'cm', res = 600)
+spectrogram(target, 
+            windowLength = 25, step = 5, yScale = 'bark', 
+            ylim = c(.8, 5), contrast = .2, brightness = -.1, 
+            dynamicRange = 40)
+# dev.off()
+```
+
+<audio controls> <source src="ex_audio/213_ut_fear_29-f-scream.wav"> </audio>
+
+
+```{r}
+# an = analyze(target, plot = TRUE, ylim = c(0, 3))
+# an$detailed[, c('time', 'pitch')]  # jumps from 1881 to 1755 at 520 ms
+mult = getSmoothContour(list(
+  time = c(0, 300, 520, 525, 700, 1000),  # time in ms
+  value = c(1, 1, sqrt(1755/1881), sqrt(1881/1755), 1, 1)), len = 1000)
+s1 = shiftPitch(target, multPitch = mult)
+# seewave::savewav(s1, f = tuneR::readWave(target)@samp.rate, filename = '../sounds/examples/213_ut_fear_29-f-scream_noJump.wav')
+
+# png('../pix/pitchJump_manip_without.png', width = 15, height = 13, units = 'cm', res = 600)
+spectrogram(s1, 44100, windowLength = 25, step = 5, yScale = 'bark', 
+            ylim = c(.8, 5), contrast = .2, brightness = -.1, 
+            dynamicRange = 40)
+# dev.off()
+```
+
+<audio controls> <source src="ex_audio/213_ut_fear_29-f-scream_noJump.wav"> </audio>
+
+
+
+# Add a pitch jump to a synthetic vocalization
+
+```{r}
+target = 'ex_audio/roar_M_597.wav'
+
+samplingRate = tuneR::readWave(target)@samp.rate  
+samplingRate  # 16000
+spectrogram(target, samplingRate, yScale = 'bark')
+```
+<audio controls> <source src="ex_audio/roar_M_597.wav"> </audio>
+
+The original mean f0:
+
+```{r}
+mean(getSmoothContour(list(
+  time = c(0,    120, 900, 1300, 1550, 1661, 1800),
+  value = c(156, 394, 373, 355, 320, 279,  197)), len = 100))  # 418
+```
+
+Synthesize source:
+
+```{r}
+s0 = soundgen(
+  sylLen = 1800,
+  pitch = list(
+    time = c(0,    120, 900, 1300, 1550, 1661, 1800),
+    value = c(156, 394, 373, 355, 320, 279,  197)),
+  subDep = list(time =  c(0, 300, 301, 1000, 1001, 1800),
+                value = c(0, 0,   25,  25,   0,    0)),
+  amFreq = rnorm(n = 50, mean = 75, sd = 10),
+  amDep = list(time =  c(0, 200, 201, 1600, 1601, 1800),
+               value = c(0, 0,   35,  35,   0,    0)),
+  jitterDep = c(0, 0, 0, 1.5, .3),
+  shimmerDep = c(0, 0, 0, 20, 5),
+  rolloff = -12,
+  noise = -40,
+  formants = NA,
+  temperature = .01,
+  addSilence = 25,
+  samplingRate = samplingRate,
+  pitchSamplingRate = samplingRate,  # for high-quality synthesis
+  plot = TRUE, yScale = 'bark'
+)
+```
+Copy filter from the original:
+
+```{r}
+s1 = transplantFormants(
+  donor = target,
+  recipient = s0,
+  samplingRate = samplingRate,
+  freqWindow = 350
+)
+s1 = transplantEnv(donor = target, recipient = s1, samplingRateR = samplingRate)
+# playme(s1, samplingRate)
+# seewave::savewav(s1, f = tuneR::readWave(target)@samp.rate, filename = 'ex_audio/roar_M_597_synth.wav')
+
+# png('../pix/pitchJump_ex_without.png', width = 15, height = 13, units = 'cm', res = 600)
+spectrogram(s1, samplingRate, yScale = 'bark')
+# dev.off()
+```
+
+<audio controls> <source src="ex_audio/roar_M_597_synth.wav"> </audio>
+
+Now we can easily do the same, but with a pitch jump
+
+```{r}
+mean(getSmoothContour(list(
+  time = c(0,    120, 900, 1300, 1550, 1551, 1660, 1661, 1800),
+  value = c(156, 394, 373, 355, 320, 750,  700,  279,  197)), len = 100))  # 441
+```
+
+```{r}
+s0_fj = soundgen(
+  sylLen = 1800,
+  pitch = list(
+    time = c(0,    120, 900, 1300, 1550, 1551, 1660, 1661, 1800),
+    value = c(156, 394, 373, 355, 320, 750,  700,  279,  197)),
+  subDep = list(time =  c(0, 300, 301, 1000, 1001, 1800),
+                value = c(0, 0,   25,  25,   0,    0)),
+  amFreq = rnorm(n = 50, mean = 75, sd = 10),
+  amDep = list(time =  c(0, 200, 201, 1600, 1601, 1800),
+               value = c(0, 0,   35,  35,   0,    0)),
+  jitterDep = c(0, 0, 0, 1.5, .3),
+  shimmerDep = c(0, 0, 0, 20, 5),
+  rolloff = -12,
+  noise = -40,
+  formants = NA,
+  temperature = .001,  # lower the temperature for reproducibility
+  addSilence = 25,
+  samplingRate = samplingRate,
+  pitchSamplingRate = samplingRate  # for high-quality synthesis
+)
+
+s1_fj = transplantFormants(
+  donor = target,
+  recipient = s0_fj,
+  samplingRate = samplingRate,
+  freqWindow = 350
+)
+s1_fj = transplantEnv(donor = target, recipient = s1_fj, samplingRateR = samplingRate)
+# playme(s1_fj, samplingRate)
+# seewave::savewav(s1_fj, f = tuneR::readWave(target)@samp.rate, filename = 'ex_audio/roar_M_597_jump.wav')
+
+# png('../pix/pitchJump_ex_with.png', width = 15, height = 13, units = 'cm', res = 600)
+spectrogram(s1_fj, samplingRate, yScale = 'bark')
+# dev.off()
+```
+
+<audio controls> <source src="ex_audio/roar_M_597_jump.wav"> </audio>

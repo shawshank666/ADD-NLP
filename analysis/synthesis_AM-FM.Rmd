@@ -1,0 +1,229 @@
+---
+title: 'NLP synthesis: AM/FM/subharmonics'
+author: "Andrey Anikin"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    fig_width: 8
+    fig_height: 6
+---
+
+```{r echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r echo=FALSE}
+library(soundgen)
+```
+
+# Amplitude modulation (AM)
+
+## AM in synthetic sounds
+
+- Multiply sound by a slowly oscillating signal
+
+- Sinusoidal AM creates a single pair of extra harmonics around each f0 harmonic
+
+- Non-sinusoidal AM creates sidebands
+
+- Pitch-synchronous AM creates subharmonics
+
+- see ?soundgen::addAM for details
+
+
+```{r}
+s1_am = soundgen(
+  sylLen = 700,
+  pitch = list(time = c(0, .15, .3, .9, 1),
+               value = c(140, 360, 365, 245, 120)),
+  rolloff = c(-5, -8),
+  formants = 'uoo0',
+  noise = c(-15, -20),
+  amFreq = 75, amDep = c(0, 0, 75, 55, 0, 0),
+  plot = TRUE, yScale = 'bark', heights = c(1, 1))
+# playme(s1_am)
+```
+
+
+```{r echo=FALSE}
+seewave::savewav(s1_am, 16000, filename = 'ex_audio/ex1_am.wav')
+```
+
+<audio controls> <source src="ex_audio/ex1_am.wav"> </audio>
+
+
+## Sinusoidal AM
+
+```{r}
+soundgen(pitch = 900, amFreq = 100, amDep = 50, amType = 'sine', 
+         plot = TRUE, ylim = c(0, 4), heights = c(1, 1))
+```
+
+
+## Non-sinusoidal AM
+
+```{r}
+soundgen(pitch = 900, amFreq = 100, amDep = 50, amShape = .25,
+         plot = TRUE, ylim = c(0, 4), heights = c(1, 1))
+```
+
+
+## Add AM to recording
+
+```{r echo=FALSE}
+spectrogram('ex_audio/speechEx.wav', yScale = 'bark')
+```
+
+<audio controls> <source src="ex_audio/speechEx.wav"> </audio>
+
+
+```{r}
+sp_am20Hz = addAM('ex_audio/speechEx.wav', 
+                  amFreq = 20, 
+                  amDep = c(0, 100))
+spectrogram(sp_am20Hz, 16000, yScale = 'bark', heights = c(2, 1))
+```
+
+```{r echo=FALSE}
+seewave::savewav(sp_am20Hz, 16000, filename = 'ex_audio/speechEx_am20.wav')
+```
+
+<audio controls> <source src="ex_audio/speechEx_am20.wav"> </audio>
+
+
+
+# Frequency modulation (FM) 
+
+## FM in synthetic sounds
+
+Regular, deterministic vibrato (the depth and frequency changes over time, but executing the command always produces nearly the same result):
+
+```{r}
+fm_rv = soundgen(
+  vibratoDep = 0:3, vibratoFreq = 7:5, 
+  sylLen = 2000, pitch = c(300, 280), 
+  plot = TRUE, ylim = c(0, 3))
+```
+
+
+```{r echo=FALSE}
+seewave::savewav(fm_rv, 16000, filename = 'ex_audio/fm_rv.wav')
+```
+
+<audio controls> <source src="ex_audio/fm_rv.wav"> </audio>
+
+
+Rapid sinusidal FM produces multiple sidebands, which looks and sounds very similar to (nonsinusoidal) AM:
+
+```{r}
+fm_rapid = soundgen(
+  vibratoDep = 2, vibratoFreq = 150,
+  sylLen = 2000, pitch = 1000, 
+  plot = TRUE, ylim = c(0, 3), invalidArgAction = 'ignore')
+```
+
+```{r echo=FALSE}
+seewave::savewav(fm_rapid, 16000, filename = 'ex_audio/fm_rapid.wav')
+```
+
+<audio controls> <source src="ex_audio/fm_rapid.wav"> </audio>
+
+
+Compare to the same sound with AM instead of FM at 150 Hz:
+
+```{r}
+am_rapid = soundgen(
+  amDep = 40, amFreq = 150, amShape = -0.5,
+  sylLen = 2000, pitch = 1000, 
+  plot = TRUE, ylim = c(0, 3))
+```
+
+```{r echo=FALSE}
+seewave::savewav(am_rapid, 16000, filename = 'ex_audio/am_rapid.wav')
+```
+
+<audio controls> <source src="ex_audio/am_rapid.wav"> </audio>
+
+
+
+## Add FM to a recording
+
+```{r}
+fmFreq = 10  # Hz
+fmDep = 1.2  # semitones
+fmDep_linear = (2 ^ (fmDep / 12) - 1) / 2
+target = tuneR::readWave('ex_audio/speechEx.wav')
+multPitch = cos(2 * pi * fmFreq * (1:length(target@left)) / target@samp.rate) * fmDep_linear + 1
+plot(multPitch, type = 'l')
+# verify that multiplying f0 by multPitch produces FM of ±fmDep/2 semitones:
+log2(range(multPitch)) * 12
+```
+
+```{r}
+sp_fm10Hz = shiftPitch(target, multPitch = multPitch)
+spectrogram(sp_fm10Hz, 16000, yScale = 'bark', heights = c(2, 1))
+# playme(sp_fm10Hz, 16000)
+```
+
+```{r echo=FALSE}
+seewave::savewav(sp_fm10Hz, 16000, filename = 'ex_audio/speechEx_fm10.wav')
+```
+
+<audio controls> <source src="ex_audio/speechEx_fm10.wav"> </audio>
+
+
+
+# Subharmonics
+
+## Fully synthetic
+
+- Literally add new sine waves (partials) between f0 harmonics
+
+- subRatio controls f0/g0
+
+- subDep controls the amplitude of added partials relative to f0
+
+
+```{r}
+s_sh = soundgen(
+  sylLen = 1200,
+  pitch = list(time = c(0, .15, .3, .9, 1),
+               value = c(140, 360, 365, 245, 120)),
+  rolloff = c(-5, -8),
+  formants = 'uoo0',
+  noise = c(-15, -20),
+  subRatio = 2, subDep = c(0, 0, 0, 35, 15))
+spectrogram(s_sh, 16000, yScale = 'bark', heights = c(3, 2))
+```
+
+```{r echo=FALSE}
+seewave::savewav(s_sh, 16000, filename = 'ex_audio/s_sh.wav')
+```
+
+<audio controls> <source src="ex_audio/s_sh.wav"> </audio>
+
+
+## Resynthesis / manipulation
+
+Subharmonics can be imitated by adding pitch-synchronous AM to an existing recording:
+
+
+```{r echo=FALSE}
+pitch = read.csv('ex_audio/speechEx_pitch.csv')$pitch  # may require checking manually for best results
+pitch = eval(parse(text = paste0('c(', pitch, ')')))
+plot(1:length(pitch) * 25, pitch, type = 'l', xlab = 'Time, ms', ylab = 'Pitch, Hz')
+```
+
+```{r}
+sp_amPS = addAM('ex_audio/speechEx.wav', 
+                amFreq = pitch / 2, 
+                amDep = c(25, 75, 25))
+spectrogram(sp_amPS, 16000, ylim = c(0, 1))
+```
+
+```{r echo=FALSE}
+seewave::savewav(sp_amPS, 16000, filename = 'ex_audio/speechEx_amPS.wav')
+```
+
+<audio controls> <source src="ex_audio/speechEx_amPS.wav"> </audio>
+

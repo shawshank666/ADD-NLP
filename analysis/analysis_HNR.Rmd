@@ -1,0 +1,332 @@
+---
+title: "Harmonics-to-noise ratio"
+author: Andrey Anikin
+date: "`r Sys.Date()`"
+output: 
+  rmarkdown::html_vignette:
+    fig_width: 8
+    fig_height: 6
+    code_folding: show
+---
+
+*I am grateful to Paul Boersma and David Reby for their valuable help and feedback on these simulations*
+
+# Introduction
+
+As defined in the popular Praat software for voice analysis, HNR is calculated as the peak of autocorrelation function of a windowed signal – for example, a single STFT frame – adjusted for the autocorrelation of the window function. A correlation of 1, corresponding to infinite HNR expressed in dB, implies that the signal is perfectly periodic. Anything that affects periodicity causes a drop in HNR, including nonstationarity within the analyzed frame (e.g., rapidly changing fo), pulse-to-pulse variation in frequency or amplitude (jitter or shimmer, respectively), or aperiodic component of any kind (e.g., deterministic chaos, turbulent noise caused by breathing, wind in the background, etc.). Given the importance and great popularity of HNR, we investigated its robustness by creating and analyzing over 100,000 fully synthetic, but realistic voice samples that systematically varied in their true signal-to-noise ratio, fundamental frequency, and spectral characteristics of both harmonic and noise components.
+
+# Simulations
+
+```{r echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r echo=FALSE}
+library(soundgen)
+library(ggplot2)
+```
+
+
+First, we define a function that measures HNR, and another one that creates a short sound with a harmonic component + noise and estimates its peak autocorrelation at lags of 0.5 to 2 periods of f0 (normally we would expect a peak at exactly 1 fundamental period, but stochastic jitter complicates matters, so we find the actual peak of ACF).
+
+Sound synthesis is performed with code adapted from soundgen:::generateEpoch. This is a lot faster than calling top function soundgen::soundgen(), and it also gives us more control over how we mix in the noise. HNR is calculated with two algorithms: soundgen:::getHNR() and Praat ("To Harmonicity (cc): 0.01, 75, 0.1, 1"). Praat is here called via unix terminal, so this bit of the code requires that Praat is installed (outside R) and that Bash commands can be executed.
+
+```{r class.source = 'fold-hide'}
+synthAndCheck = function(
+    n_cycles = 10,  # the number of glottal cycles (f0 periods) to synthesize
+    f0 = 100,  # average f0 across all cycles 
+    jitter = .17,  # continuous variation of f0, semitones
+    rolloff = -9,  # rolloff of f0 harmonics, dB/oct 
+    h = 20,  # the number of harmonics of f0 to synthesize
+    SNR = 6,  # signal-to-noise ratio, dB 
+    rolloffNoise = -3,  # rolloff of noise, dB/oct
+    interpol = c('none', 'parab', 'spline', 'sinc')[4],
+    wn = 'hanning',
+    samplingRate = 44100,  # sampling rate
+    cmd_praat = 'praat --run getHNR.praat'
+) {
+  ## generate the harmonic component (f0 + harmonics, each as a separate sine wave)
+  # f0 values per period with some jitter added (see soundgen:::generateHarmonics)
+  # browser()
+  f0_cycle = f0 * 2 ^ (rnorm(n_cycles, mean = 0, sd = jitter) / 12)
+  # plot(f0_cycle, type = 'b')
+  
+  # f0 values upsampled to the length of the waveform
+  len = round(sum(samplingRate / f0_cycle))
+  f0_upsampled = approx(f0_cycle, n = len)$y
+  f0_cumsum = cumsum(f0_upsampled)
+  
+  # calculate the amplitudes of the first h harmonics (if h is large, the
+  # returned number may be smaller, depending on f0, samplingRate, rolloff, and
+  # dynamic range - basically, as many as are audible, but no more than "h")
+  am = as.numeric(soundgen:::getRolloff(
+    pitch_per_gc = f0,
+    nHarmonics = h, 
+    rolloff = rolloff, 
+    samplingRate = samplingRate
+  ))
+  
+  # create a sine wave for each harmonic and add them up (phase = 0 for all harmonics)
+  signal = rep(0, len)
+  for (h in 1:length(am)) {
+    signal = signal + sin(2 * pi * f0_cumsum * h / samplingRate) * am[h]
+  }
+  # signal = signal / max(abs(signal))  # normalize to [-1, 1]
+  signal = signal / sqrt(mean(signal^2))  # RMS normalization
+  # plot(signal, type = 'l')
+  
+  
+  ## generate noise with linearly decaying spectrum about 1200 Hz (rolloffNoise
+  ## = 0 gives white noise). NB: exponentially decaying noise spectrum produces
+  ## noise that is strongly autocorrelated - not very convenient here b/c very
+  ## noisy signals still measure as having rather high HNR
+  # noise = runif(len, -1, 1) * 10^(-SNR / 20)
+  noise = soundgen:::generateNoise(  
+    len = len,
+    noiseFlatSpec = 1200,
+    rolloffNoise = rolloffNoise,
+    rolloffNoiseExp = 0,
+    temperature = 0)
+  # normalize noise amplitude to the desired SNR
+  # noise = noise / max(abs(noise)) * 10 ^ (-SNR / 20)
+  # RMS normalization instead of [-1, 1]
+  noise = noise / sqrt(mean(noise^2)) * 10 ^ (-SNR / 20)
+  # plot(noise, type = 'l')
+  # seewave::spec(noise, samplingRate, dB = 'max0')
+  
+  # add signal and noise
+  signalNoise = signal + noise
+  # signalNoise = signalNoise / max(abs(signalNoise))
+  # plot(signalNoise, type = 'l')
+  
+  # find the maximum of autocorrelation function within specified lag range,
+  # namely between half the period of f0 (assuming it's not too widely affected
+  # by jitter) and twice the period of f0
+  n_per_cycle = round(samplingRate / f0)
+  lag.min = n_per_cycle / 1.2
+  lag.max = n_per_cycle * 1.2
+  HNR = soundgen:::getHNR(
+    signalNoise, samplingRate = samplingRate, 
+    lag.min = lag.min, lag.max = lag.max, interpol = interpol, wn = wn
+  )
+  # HNR
+  # browser()
+  
+  # now measure HNR with Praat
+  seewave::savewav(signalNoise, samplingRate, filename = 'temp.wav')
+  HNR_Praat = system(cmd_praat, intern = TRUE)
+  
+  return(list(HNR = HNR, HNR_Praat = HNR_Praat, 
+              signal = signal, signalNoise = signalNoise))
+}
+```
+
+Example output:
+
+```{r}
+synthAndCheck(n_cycles = 5, jitter = 0, SNR = 10)[c('HNR', 'HNR_Praat')]
+synthAndCheck(n_cycles = 15, jitter = 0, SNR = 10)[c('HNR', 'HNR_Praat')]
+synthAndCheck(n_cycles = 15, jitter = 0, SNR = 50)[c('HNR', 'HNR_Praat')]
+synthAndCheck(n_cycles = 5, jitter = 0, SNR = -20)[c('HNR', 'HNR_Praat')]
+synthAndCheck(n_cycles = 50, jitter = 0, h = Inf, SNR = 60, f0 = 300)[c('HNR', 'HNR_Praat')]
+synthAndCheck(n_cycles = 50, jitter = 0, h = Inf, SNR = 60, f0 = 380)[c('HNR', 'HNR_Praat')]
+```
+
+Now let's check systematically for a variety of control parameters.
+
+```{r class.source = 'fold-hide'}
+# ~2.2 min / 1000 iter, so ~25-30K iter / hour
+data_file = '../data/hnr_with_praat.RDS'
+if (file.exists(data_file)) {
+  harm = readRDS(data_file)
+} else {
+  harm = expand.grid(
+    iter = 1:5,
+    n_cycles = 50, # c(10, 50), # c(3, 5, 10, 50),  
+    f0 = seq(100, 1000, 100), 
+    jitter = c(0, .17), # typical jitter of 1% corresponds to 12 * log2(1.01) = 0.17 semitones
+    rolloff = c(-30, -25, -20, -16, -12, seq(-10, 0, 2)),
+    h = Inf, # 20, # c(1, 5, 10),  
+    SNR = seq(-40, 60, by = 10), # c(-6, 0, 6, 20, 40), 
+    rolloffNoise = c(-30, -25, -20, -16, -12, seq(-10, 0, 2))
+  )
+  
+  # synthesize sounds corresponding to these combinations of control parameters
+  # and evaluate ACF (execution time ~5 min per 100,000 iterations)
+  n_iter = nrow(harm)
+  time_start = proc.time()
+  for (i in 1:n_iter) {
+    temp = synthAndCheck(n_cycles = harm$n_cycles[i],
+                         f0 = harm$f0[i],
+                         jitter = harm$jitter[i],
+                         rolloff = harm$rolloff[i],
+                         h = harm$h[i],
+                         SNR = harm$SNR[i],
+                         rolloffNoise = harm$rolloffNoise[i])
+    harm[i, c('f0_detected', 'max_acf', 'HNR', 'HNR_Praat')] = c(
+      as.numeric(temp$HNR), as.numeric(temp$HNR_Praat))
+    reportTime(i, time_start, n_iter)
+  }
+  saveRDS(harm, data_file)
+}
+# summary(harm)
+
+# rbind to have HNR by soundgen and praat as the same variable
+harm1 = harm
+harm1$HNR = harm$HNR_Praat
+harm$method = 'soundgen'
+harm1$method = 'praat'
+harm = harm[, -which(colnames(harm) == 'HNR_Praat')]
+harm1 = harm1[, -which(colnames(harm1) == 'HNR_Praat')]
+df = rbind(harm, harm1)
+```
+
+
+Pitch tracking works OK, except at the lowest SNR:
+
+```{r class.source = 'fold-hide'}
+ggplot(df[df$jitter == 0 & df$method == 'soundgen', ], aes(f0, f0_detected, color = SNR)) +
+  geom_point(size = .5, alpha = .5) +
+  geom_smooth() +
+  geom_abline(slope = 1, intercept = 0, linetype = 3)
+```
+
+
+HNR as measured by soundgen vs Praat:
+
+```{r class.source = 'fold-hide'}
+ggplot(df[df$jitter == 0, ], aes(SNR, HNR, color = method)) +
+  geom_smooth() +
+  geom_abline(slope = 1, intercept = 0, linetype = 3) +
+  geom_vline(xintercept = c(0, 40), linetype = 2, width = 2) +
+  theme_bw()
+```
+
+Thus: Praat is more accurate at SNR 40-60 dB, soundgen more accurate below 0 dB. Both fine within 0-40 dB.
+
+A simple check of independent effects of each parameter using multiple regression:
+
+```{r}
+df = na.omit(df)
+summary(lm(HNR ~ f0 + jitter + rolloff + SNR + rolloffNoise, data = df))
+```
+
+No effect of f0 or rolloff in the absence of jitter
+
+```{r class.source = 'fold-hide'}
+ggplot(df[df$SNR >= 0 & df$SNR <= 40 & df$jitter == 0, ], 
+       aes(f0, HNR-SNR, group = rolloff, color = rolloff)) +
+  geom_smooth() +
+  geom_hline(yintercept = 0, linetype = 3) +
+  facet_wrap(~method) +
+  theme_bw()
+```
+
+
+F0 has little effect, and the rolloff of its harmonics affects HNR mostly in the presence of ~white noise.
+
+```{r warning=FALSE, class.source = 'fold-hide'}
+ggplot(df[df$SNR >= 0 & df$SNR <= 40 & df$jitter == 0.17, ], 
+       aes(f0, HNR-SNR, group = rolloff, color = rolloff)) +
+  geom_smooth() +
+  geom_hline(yintercept = 0, linetype = 3) +
+  facet_wrap(~method) +
+  theme_bw()
+```
+
+At low SNRs, HNR doesn't depend much on rolloff, while at high SNRs HNR drops as rolloff approaches 0 (very strong harmonics).
+
+```{r class.source = 'fold-hide'}
+ggplot(df[df$SNR >= 0 & df$SNR <= 40 & df$jitter == 0.17, ], aes(rolloff, HNR-SNR, group = method, color = method)) +
+  geom_smooth() +
+  geom_hline(yintercept = 0, linetype = 3) +
+  facet_wrap(~SNR) +
+  theme_bw()
+```
+
+Less pronounced without jitter:
+
+```{r class.source = 'fold-hide'}
+ggplot(df[df$SNR >= 0 & df$SNR <= 40 & df$jitter == 0, ], aes(rolloff, HNR-SNR, group = method, color = method)) +
+  geom_smooth() +
+  geom_hline(yintercept = 0, linetype = 3) +
+  facet_wrap(~SNR) +
+  theme_bw()
+```
+
+No effect of rolloffNoise, with or without jitter:
+
+```{r warning=FALSE, class.source = 'fold-hide'}
+ggplot(df[df$SNR >= 0 & df$SNR <= 40, ], 
+       aes(f0, HNR-SNR, group = rolloffNoise, color = rolloffNoise)) +
+  geom_smooth() +
+  geom_hline(yintercept = 0, linetype = 3) +
+  facet_wrap(~jitter + method) +
+  theme_bw()
+```
+
+
+## Vowels
+
+```{r}
+SNR = 20
+noise = rnorm(44100 * .25)
+noise = noise / sqrt(mean(noise^2)) * 10^(-SNR/20)
+
+vwl = expand.grid(vowel = c('u', 'a', 'o', 'e', 'i', '0'),
+                  jitter = c(0, .17, .34))
+time_start = proc.time()
+for (i in 1:nrow(vwl)) {
+  vwl_i =  soundgen(formants = as.character(vwl$vowel[i]), jitterDep = vwl$jitter[i], 
+                    sylLen = 250, addSilence = 0, 
+                    pitch = 300, rolloff = -6,
+                    temperature = 1e-6,
+                    samplingRate = 44100)
+  vwl_i = vwl_i / sqrt(mean(vwl_i^2))
+  signalNoise = addVectors(vwl_i, noise, insertionPoint = 1)
+  # playme(signalNoise, 44100)
+  n_per_cycle = round(44100 / 300)
+  lag.min = n_per_cycle / 1.2
+  lag.max = n_per_cycle * 1.2
+  HNR = soundgen:::getHNR(signalNoise, samplingRate = 44100, 
+                          lag.min = lag.min, lag.max = lag.max, 
+                          interpol = 'sinc', wn = 'hanning')
+  vwl$HNR[i] = HNR$HNR
+  # soundgen:::getHNR(signalNoise, 44100)$HNR
+  # an = analyze(signalNoise, 44100, windowLength = 150, pitchMethods = 'autocor', 
+  #              loudness = NULL, nFormants = 0, novelty = NULL, roughness = NULL)
+  # vwl$HNR[i] = an$summary$HNR_median 
+  seewave::savewav(signalNoise, 44100, filename = 'temp.wav')
+  vwl$HNR_Praat[i] = system('praat --run getHNR.praat', intern = TRUE)
+  # reportTime(i, time_start, nrow(vwl))
+}
+```
+
+rbind and plot per vowel (note: "0" stands for schwa):
+
+```{r}
+vwl1 = vwl
+vwl1$HNR = vwl$HNR_Praat
+vwl$method = 'soundgen'
+vwl1$method = 'praat'
+df_vwl = rbind(vwl, vwl1)
+df_vwl$HNR = as.numeric(df_vwl$HNR)
+
+j = df_vwl[df_vwl$jitter == max(df_vwl$jitter) & df_vwl$method == 'soundgen', ]
+ord = j$vowel[order(j$HNR, decreasing = TRUE)]
+df_vwl$vowel = factor(df_vwl$vowel, levels = ord)
+
+ggplot(df_vwl, aes(vowel, HNR, fill = method)) +
+  geom_col(width = .6, position = position_dodge(.6)) +
+  geom_hline(yintercept = 20, linetype = 3) +
+  facet_wrap(~jitter) +
+  theme_bw()
+
+```
+
+Thus: jitter has a more pronounced effect on HNR when upper harmonics are stronger, which can be b/c of source spectrum (pressed vs breathy phonation) or because of the filter (vowels with high resonance frequencies).
+
+
+# Conclusion
+
+Our simulations confirm that, when the noise-embedded signal is perfectly periodic, the measured HNR equals the true signal-to-noise ratio and does not depend on the fundamental frequency or the spectrum of either the periodic part or noise. As expected, jitter (i.e., a metric for period perturbation) causes a drop in HNR, but this effect is considerably more pronounced in vocalizations with strong upper harmonics compared to vocalizations in which most of the spectral energy is found in low frequencies. Thus, for a given ground-truth signal-to-noise ratio, aperiodicity as measured with HNR will appear to be more pronounced when the glottal pulses are less sinusoidal (e.g., in pressed or tense vs. relaxed or breathy voices) and in vowels with higher formants (e.g., in /e/ vs. /u/).

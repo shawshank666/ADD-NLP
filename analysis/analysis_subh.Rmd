@@ -1,0 +1,231 @@
+---
+title: "NLP analysis: measuring subharmonics"
+author: "Andrey Anikin"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    fig_width: 8
+    fig_height: 6
+    code_folding: show
+---
+
+```{r echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r echo=FALSE}
+library(soundgen)
+library(ggplot2)
+library(patchwork)
+```
+
+This vignette demonstrates how subharmonics can be detected and quantified using the cepstral method implemented in soundgen::analyze(), which looks for prominent cepstral peaks corresponding to an integer fraction of the estimated fundamental frequency. A detailed description of the algorithm can be found in the technical documentation (see ?soundgen::analyze and ?soundgen::subhToHarm). The main objective here is to validate it by comparing the measured frequency and depth of subharmonics with the ground truth in computer simulations.
+
+# A single synthetic sound
+
+As a first demonstration, let us synthesize a single sound with variable f0 and an episode of period doubling in the middle:
+
+```{r}
+s_sh = soundgen(
+  sylLen = 1200,  # duration = 1200 ms
+  pitch = c(380, 550, 500, 220) / 2,  # variable f0 (values in Hz)
+  subDep = c(0, 0, 40, 20, 0, 0),  # the depth of subharmonics (changes over time)
+  temperature = 1e-3, plot = TRUE, ylim = c(0, 1)
+)
+# seewave::meanspec(s, f= 16000, wl = 1024)
+```
+
+The episode of subharmonics is clearly visible in the spectrogram between ~400 and 1000 ms. Let us see if we can detect it by analyzing the sound:
+
+```{r}
+an = analyze(s_sh, 16000, windowLength = 30, plot = TRUE, ylim = c(0, 2))
+# an$detailed$subDep
+```
+
+The first thing to check is that the f0 contour is correct (the blue points in the plot above). In this instance, the subharmonics are relatively weak, and f0 is detected correctly throughout the sound - this is the key prerequisite for the validity of subharmonic analysis. Now let us check whether subharmonics are detected in the sound:
+
+```{r}
+table(an$detailed$subRatio)
+```
+
+There are several frames (each 30 ms long) in which the algorithm detected the presence of significant frequency components at exactly 1/2 of the fundamental frequency f0 - in other words, subharmonics at f0/2. Where are they, and what is their estimated strength or "depth"?
+
+```{r}
+plot(getSmoothContour(anchors = c(0, 0, 40, 20, 0, 0), len = nrow(an$detailed), valueFloor = 0),
+     type = 'l', col = 'blue', xlab = 'STFT frame',
+     ylab = 'SH depth, %', ylim = c(0, 100))
+points(an$detailed$subDep * 100, type = 'b')
+```
+
+
+The blue contour shows the (approximate) value of "subDep" parameter used to synthesize the sound - that is, the "ground truth" of subharmonic generation. The points are estimates returned by soundgen::analyze(), one point for each 30-ms analysis frame. The location and depth of detected subharmonics is more or less correct.
+
+
+# 10,000 synthetic sounds
+
+To validate the algorithm more systematically, let us perform the following large-scale simulation:
+
+- generate 10,000 sounds with known subDep using soundgen()
+
+- run analyze() to measure apparent subDep
+
+- compare with the actually used values
+
+
+## Control parameters
+
+Let's set up a dataframe containing our target values for the synthesis:
+
+```{r}
+n_sounds = 10000
+out = data.frame(
+  pitch = runif(n_sounds, 100, 600),  # f0 ranges from 100 to 600 Hz
+  subDep = rbeta(n_sounds, 1, 5),  # the depth of subharmonics ranges from 10% to 50% of f0 amplitude
+  subRatio = sample(2:5, n_sounds, replace = TRUE),  # f0 / f_sub ratio ranges from 2 to 5
+  noise = runif(n_sounds, -60, -20)  # noise is added at an SNR of 20 to 60 dB
+)
+n = nrow(out)
+summary(out)
+```
+
+
+## Synthesis + analysis
+
+Now let's synthesize all these sounds and analyze them. Because this is time-consuming (about 2.5 h), the results are saved on disk and loaded from file "validate_subDep.RDS" if it exists.
+
+```{r class.source = 'fold-hide'}
+data_file = '../data/validate_subDep.RDS'
+if (file.exists(data_file)) {
+  out = readRDS(data_file)
+} else {
+  time_start = proc.time()  # ~2.5 h
+  for (i in 1:n) {
+    s = suppressMessages(suppressWarnings(
+      soundgen(
+        sylLen = 300, # just long enough to have a few periods of even the slowest AM
+        addSilence = 0, attackLen = 10, 
+        ampl = rnorm(3, -10, 10), # some stochastic variation in amplitude
+        pitch = out$pitch[i] * rnorm(3, 1, .1), # f0 varies around the specified value
+        subDep = out$subDep[i] * 100, # depth of subharmonics: to %
+        subRatio = out$subRatio[i],  # f0/g0 ratio
+        noise = out$noise[i], 
+        # stochastic filter with 4 formants roughly in the human range
+        formants = c(runif(1, 300, 800), 
+                     runif(1, 850, 1800), 
+                     runif(1, 1900, 3600), 
+                     runif(1, 3700, 4700)), 
+        temperature = 1e-3 # very little random variation in control parameters
+      )
+    ))
+    # spectrogram(s, ylim = c(0, 3))
+    # playme(s)
+    an = analyze(
+      s, 
+      samplingRate = 16000, 
+      windowLength = 50, step = 25,
+      # skip other analyses to save time
+      roughness = NULL, formants = 0, novelty = NULL, loudness = NULL
+    )
+    out$subDep_est[i] = mean(an$detailed$subDep, na.rm = TRUE)
+    out$subRatio_est[i] = round(median(an$detailed$subRatio, na.rm = TRUE))
+    out$pitch_detected[i] = mean(an$detailed$pitch, na.rm = TRUE)
+    reportTime(i, time_start, n)
+  }
+  # was f0 measured correctly?
+  out$idx_pitchOK = abs(log2(out$pitch / out$pitch_detected)) < .25
+  out$idx_pitchOK[is.na(out$idx_pitchOK)] = FALSE
+  # table(out$idx_pitchOK)
+  
+  # was g0 measured correctly?
+  out$idx_g0OK = out$idx_pitchOK & (out$subRatio_est == out$subRatio)
+  table(out$idx_g0OK)
+  
+  saveRDS(out, data_file)
+}
+```
+
+
+## Checking the results
+
+Now we have estimates of f0/g0 ratio (subRatio) and the strength, or depth, or subharmonics (subDep) in each 50-ms STFT frame:
+
+```{r}
+summary(out)
+```
+
+Let's drop missing values and create separate dataframes containing only those synthetic sounds in which f0 or g0 was detected correctly (which is not always the case because g0 may be mistakenly identified as the fundamental frequency):
+
+```{r}
+out = na.omit(out)
+out_f0OK = out[out$idx_pitchOK, ]
+out_g0OK = out[out$idx_g0OK, ]
+table(out$idx_pitchOK, out$idx_g0OK)
+```
+
+Overall accuracy of subDep estimation:
+
+```{r}
+cor(out$subDep, out$subDep_est, use = 'complete.obs')
+cor(out_f0OK$subDep, out_f0OK$subDep_est, use = 'complete.obs')
+cor(out_g0OK$subDep, out_g0OK$subDep_est, use = 'complete.obs')
+```
+
+Thus, subDep estimation crucially depends on correct pitch tracking. We can also see it in these scatterplots:
+
+```{r class.source = 'fold-hide'}
+out$fo_correct = ifelse(out$idx_pitchOK, 'fo correct', 'fo incorrect')
+ggplot(out, aes(subDep, subDep_est)) +
+  geom_point(size = .25, alpha = .25) +
+  geom_smooth() +
+  geom_abline(intercept = 0, slope = 1, linetype = 2, color = 'green', linewidth = 1) +
+  facet_wrap(~fo_correct) +
+  xlab('True depth') +
+  ylab('Measured depth') +
+  theme_bw()
+```
+
+Same for g0 - when it is not measured correctly, subDep is obviously rubbish:
+
+```{r class.source = 'fold-hide'}
+out$go_correct = ifelse(out$idx_g0OK, 'go correct', 'go incorrect')
+ggplot(out, aes(subDep, subDep_est)) +
+  geom_point(size = .25, alpha = .25) +
+  geom_smooth() +
+  geom_abline(intercept = 0, slope = 1, linetype = 2, color = 'green', linewidth = 1) +
+  facet_wrap(~go_correct) +
+  xlab('True depth') +
+  ylab('Measured depth') +
+  theme_bw()
+```
+
+The relationship between true and measured subDep is reasonably linear for all tested subRatio's:
+
+```{r class.source = 'fold-hide'}
+ggplot(out_g0OK, aes(subDep, subDep_est)) +
+  geom_point(size = .5) +
+  geom_smooth() +
+  geom_abline(intercept = 0, slope = 1, linetype = 3) +
+  facet_wrap(~subRatio) +
+  theme_bw()
+```
+
+But subRatio is harder to measure correctly when it is >2 (fortunately, this is rare in real vocalizations):
+
+```{r}
+aggregate((out$subRatio_est == out$subRatio) ~ out$subRatio, FUN = mean)
+```
+
+The error of subDep estimation also tends to decrease for higher f0 (subDep is underestimated in low-pitched vocalizations, but the average error is close to 0 for f0 > 400 Hz):
+
+```{r class.source = 'fold-hide'}
+ggplot(out_g0OK, aes(pitch, subDep - subDep_est)) +
+  geom_point() +
+  geom_smooth() +
+  theme_bw()
+```
+
+This is likely because we get more periods within each STFT window. Longer STFT windows are generally better for NLP measurement as long as the sound doesn't change too much within each window.
+
+## Conclusion
+
+The tested cepstral algorithm for detecting subharmonics and measuring their depth produces valid estimates of the subharmonic frequency (f_sub or g0) and its depth, but ONLY if f0 is detected correctly. When subharmonics are strong, they are easily mistaken for f0, and then the output of the algorithm is completely meaningless. Further, the accuracy of estimation noticeably improves when f0 is high relative to the length of the chosen analysis window (i.e., an analysis frame should include at least several fundamental periods).

@@ -1,0 +1,205 @@
+---
+title: 'NLP synthesis: biphonation'
+author: "Andrey Anikin"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    fig_width: 8
+    fig_height: 6
+---
+
+
+```{r echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r echo=FALSE}
+library(soundgen)
+```
+
+
+
+## Biphonation
+
+- Two sound sources in parallel that don't infuence each other's airflow --> additive effects, two independent sources
+
+- Two sound sources sitting one on top of the other in the airway or strongly coupled --> multiplicative effects, two interacting sources
+
+
+## Parallel
+
+Like two notes played simultaneously on a piano: we can just synthesize them independently and add up the results:
+
+```{r echo=FALSE}
+par(mfrow = c(1, 3))
+s1 = cos(2 * pi * 20 * (1:1000)/1000)
+plot(s1, type = 'l')
+s2 = cos(2 * pi * 2 * (1:1000)/1000)
+plot(s2, type = 'l')
+plot(s1 + s2, type = 'l')
+```
+
+The spectrum shows two frequencies (here two pure tones):
+
+```{r echo=FALSE}
+seewave::spec(rep(s1 + s2, 10), f = 1000, dB = 'max0', flim = c(0, 0.1))
+```
+
+
+## In series
+
+One source "downstream" of another, modulating baseline air pressure
+
+```{r echo=FALSE}
+par(mfrow = c(1, 3))
+# the "higher" frequency ("higher" in Hz and anatomically, in the sense that
+# it's the one sitting downstream and being modulated)
+s1 = cos(2 * pi * 20 * (1:1000)/1000)
+plot(s1, type = 'l')
+# the "lower" frequency modulating the first one (rescaled to range from 0 to 1)
+s2 = (cos(2 * pi * 2 * (1:1000)/1000) + 1) / 2
+range(s2)
+plot(s2, type = 'l')
+plot(s1 * s2, type = 'l')
+```
+
+The spectrum shows the higher frequency modulated by the lower one:
+
+```{r echo=FALSE}
+seewave::spec(rep(s1 * s2, 10), f = 1000, dB = 'max0', flim = c(0, 0.1))
+```
+
+
+Implications for biphonation:
+
+- Create two sources separately
+
+- Add with a multiplicative term if one modulates the other
+
+
+
+## Example of biphonation: whistle & tone
+
+```{r}
+s1 = soundgen(pitch = c(200), sylLen = 500, rolloff = -15, 
+              addSilence = 0, attackLen = 5, samplingRate = 40000)
+s1 = soundgen:::zeroOne(s1)
+spectrogram(s1, 40000, ylim = c(0, 5), heights = c(2, 1), osc = FALSE)
+```
+
+
+```{r echo=FALSE}
+seewave::savewav(s1, 40000, filename = 'ex_audio/biphon_tone.wav')
+```
+
+<audio controls> <source src="ex_audio/biphon_tone.wav"> </audio>
+
+
+```{r}
+s2 = soundgen(pitch = c(2500, 2200, 2700), sylLen = 500, rolloff = -30, 
+              jitterDep = .25, shimmerDep = 25, addSilence = 0, 
+              attackLen = 5, formants = NULL, samplingRate = 40000)
+s2 = s2[1:length(s1)]
+spectrogram(s2, 40000, ylim = c(0, 10), windowLength = 15, osc = FALSE)
+```
+
+
+```{r echo=FALSE}
+seewave::savewav(s2, 40000, filename = 'ex_audio/biphon_whistle.wav')
+```
+
+<audio controls> <source src="ex_audio/biphon_whistle.wav"> </audio>
+
+
+Whistle & tone added:
+
+```{r}
+spectrogram(s1 + s2, 40000, ylim = c(0, 10), windowLength = 15, osc = FALSE)
+```
+
+
+```{r echo=FALSE}
+seewave::savewav(s1 + s2, 40000, filename = 'ex_audio/biphon_add.wav')
+```
+
+<audio controls> <source src="ex_audio/biphon_add.wav"> </audio>
+
+
+Whistle & tone multiplied:
+
+```{r echo=FALSE, fig.width=8, fig.height=5}
+spectrogram(s1 * s2, 40000, ylim = c(0, 10), windowLength = 15, osc = FALSE)
+```
+
+
+
+```{r echo=FALSE}
+seewave::savewav(s1 * s2, 40000, filename = 'ex_audio/biphon_mult.wav')
+```
+
+<audio controls> <source src="ex_audio/biphon_mult.wav"> </audio>
+
+
+## Example of biphonation: synthetic wapiti
+
+The low-freq component:
+```{r}
+formants = c(130, 400, 600, 800, 1050, 1250, 1370, 1580)
+s1 = soundgen(
+  sylLen = 1450,
+  attackLen = c(150, 50),
+  pitch = c(120, 150, 145, 120),
+  jitterDep = .25, shimmerDep = 10,
+  rolloff = -20,
+  formants = formants,
+  formantDep = 2, formantWidth = 0.5, formantCeiling = 5,
+  noise = c(-20, -10),
+  temperature = .02,
+  addSilence = 0,
+  samplingRate = 22050,
+  pitchSamplingRate = 22050,
+  plot = F, ylim = c(0, 5)
+)
+```
+
+The high-frequency component:
+
+```{r}
+s2 = soundgen(
+  sylLen = 2900,
+  attackLen = 200,
+  pitch = c(670, 1000, 1102, 1239, 1367, 1376, 1599, 1579, 1559, 1314),
+  jitterDep = c(.05, .05, .2, .2, .05), shimmerDep = 5,
+  rolloff = c(-10, -2, 0, -4),
+  noise = c(-40, -10),
+  formants = formants,
+  formantDep = 1, formantWidth = 0.5,
+  formantLocking = c(.5, rep(1, 8)),
+  formantCeiling = 5,
+  temperature = 1e-6,
+  addSilence = 0,
+  samplingRate = 22050,
+  pitchSamplingRate = 22050,
+  play = F, plot = T, osc = T, yScale = 'bark'
+)
+```
+
+Add them up with modulation:
+
+```{r}
+# make sure both are the same length (g0 ends 150 ms before f0)
+s1n = soundgen:::matchLengths(s1, len = length(s2) + .13 * 22050, padDir = 'left')  
+s1_01 = soundgen:::zeroOne(s1n) # set range to [0, 1]
+s2n = soundgen:::matchLengths(s2, len = length(s1n), padDir = 'right') 
+s = s1n/4 + s2n * s1_01
+spectrogram(s, 22050, yScale = 'bark')
+# playme(s, 22050)
+```
+
+
+```{r echo=FALSE}
+seewave::savewav(s, 22050, filename = 'ex_audio/biphon_bugle.wav')
+```
+
+<audio controls> <source src="ex_audio/biphon_bugle.wav"> </audio>
+

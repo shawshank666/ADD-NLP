@@ -1,0 +1,215 @@
+---
+title: 'NLP synthesis: chaos'
+author: "Andrey Anikin"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    fig_width: 8
+    fig_height: 6
+---
+
+```{r echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r echo=FALSE}
+library(soundgen)
+```
+
+# Fully synthetic
+
+There is no way to synthesize true deterministic chaos with residual harmonic structure in soundgen. However, there are several roundabout ways to achieve a comparable effect. As already mentioned, strong jitter and shimmer create harsh sounds that are perceptually similar to deterministic chaos, especially for higher f0 values. For instance, here is a synthetic scream:
+
+```{r}
+ch0 = soundgen(
+  sylLen = 1200, 
+  attackLen = c(10, 200),
+  pitch = list(
+    time = c(0, 110, 111, 180, 350, 940, 941, 1100, 1200),
+    value = c(700, 1150, 1550, 2000, 2240, 1940, 1180, 900, 500)),
+  formants = c(900, 1300, 3300, 4300),
+  temperature = 1e-6,  # reduce stochastic behavior to ensure reproducibility
+  samplingRate = 44100, plot = TRUE, ylim = c(0, 5))
+```
+
+```{r echo=FALSE}
+seewave::savewav(ch0, 44100, filename = 'ex_audio/ch0.wav')
+```
+
+<audio controls> <source src="ex_audio/ch0.wav"> </audio>
+
+
+Now let's add a 200-ms episode of chaos in the middle of it (400-600 ms)
+
+```{r}
+ch1 = soundgen(
+  sylLen = 1200, 
+  attackLen = c(10, 200),
+  pitch = list(
+    time = c(0, 110, 111, 180, 350, 940, 941, 1100, 1200),
+    value = c(700, 1150, 1550, 2000, 2240, 1940, 1180, 900, 500)),
+  jitterDep = list(time = c(0, 400, 401, 600, 601, 1200),
+                   value = c(0, 0,  2, 2, 0,   0)),
+  formants = c(900, 1300, 3300, 4300),
+  temperature = 1e-6,  # reduce stochastic behavior to ensure reproducibility
+  samplingRate = 44100, plot = TRUE, ylim = c(0, 5))
+```
+
+```{r echo=FALSE}
+seewave::savewav(ch1, 44100, filename = 'ex_audio/ch1.wav')
+```
+
+<audio controls> <source src="ex_audio/ch1.wav"> </audio>
+
+Another method is to encode very rapid pitch jumps, say between f0 and a formant or between harmonically related values, like this:
+
+```{r}
+ch2 = soundgen(
+  sylLen = 1200, 
+  pitch = list(
+    time = c(0, 80, 81, 230, 231, 385, 
+             # 500 time anchors here - an episode of "chaos"
+             seq(385, 850, length.out = 500), 
+             851, 1020, 1021, 1085),
+    value = c(700, 1130, 1000, 1200, 1860, 1840, 
+              # random f0 jumps b/w 1.2 & 1.8 KHz 
+              sample(c(1200, 1800), size = 500, replace = TRUE), 
+              1620, 1540, 1220, 900)),
+  temperature = 0.05, 
+  tempEffects = list(pitchDep = 0),
+  jitterDep = .3,
+  rolloffKHz = 0, rolloff = 0, formants = c(900, 1300, 3300, 4300),
+  samplingRate = 44100, plot = TRUE, ylim = c(0, 5))
+```
+
+```{r echo=FALSE}
+seewave::savewav(ch2, 44100, filename = 'ex_audio/ch2.wav')
+```
+
+<audio controls> <source src="ex_audio/ch2.wav"> </audio>
+
+More examples and detailed explanations of soundgen-specific control parameters can be found in the vignette on sound synthesis: <a href="https://cogsci.se/soundgen/sound_generation.html">https://cogsci.se/soundgen/sound_generation.html</a>
+
+
+# Resynthesis / manipulation
+
+To remove or add chaos from an existing recording, we can synthesize the vocal source and copy the original spectro-temporal envelope. For instance, here we can turn the second episode of subharmonics into chaos or just remove NLP from that fragment. Example taken from Anikin, A., Pisanski, K., Massenet, M., & Reby, D. (2021). Harsh is large: nonlinear vocal phenomena lower voice pitch and exaggerate body size. Proceedings B 288(1954): 20210872.
+
+The original recording:
+
+```{r}
+spectrogram('ex_audio/cry_F_494.wav', yScale = 'bark')
+```
+
+<audio controls> <source src="ex_audio/cry_F_494.wav"> </audio>
+
+
+## Create an approximate synthetic version of the target sound, ignoring the filter (formants)
+
+```{r}
+pitch = c(646, 646, 646, 684, 722, 741, 768, 784, 796, 824, 844, 870, 870, 870, 889, 889, 898, 917, 944, 972, 1008, 1027, 1033, 1028, 1022, 1020, 1000, 1000, 1000, 986, 1000, 986, 1013, 1000, 986, 988, 988, 988, 988, 988, 988, 988, 988, 988, 988, 988, 988, 988, 1013, 1013, 1013, 1013, 1013, 1013, 1013, 1013, 1013, 1013, 1013, 1013, 1013, 1013, 1038, 1038, 1038, 1038, 1038, 1038, 1020, 1013, 1013, 1013, 1013, 1020, 1013, 1013, 1008, 1013, 1013, 1013, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 1013, 659, 513, 513, 525, 551, 580, 565, 642, 659, 653, 666, 658, 652, 646, 637, 628, 625, 622, 617, 606, 613, 614, 606, 604, 594, 605, 591, 608, 596, 605, 598, 606, 597, 598, 596, 595, 592, 597, 595, 594, 592, 591, 589, 584, 582, 589, 617, 913, 966, 1027, 1013, 1013, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, 646, 591, 565, 525, 501, 490, 479, 469, 469, 450, 450, 450)  # from any pitch tracker, eg Praat, soundgen::analyze(), or soundgen::pitch_app()
+
+s_tonal = soundgen(
+  sylLen = 1700,
+  pitch = pitch,
+  rolloff = -15,
+  noise = -30,
+  rolloffNoise = 0,
+  jitterDep = .02,
+  shimmerDep = 2,
+  formants = NA,
+  temperature = 1e-4,
+  addSilence = 0,
+  samplingRate = 22050,
+  plot = TRUE, yScale = 'bark'
+)
+```
+
+
+## Do whatever you like with NLP
+
+Here, let's create a tonal version (as above) + one with chaos between 1.1 and 1.4 seconds.
+
+```{r}
+s_ch = soundgen(
+  sylLen = 1700,
+  pitch = pitch,
+  rolloff = -15,
+  noise = -30,
+  rolloffNoise = 0,
+  jitterDep = list(time = c(0, 1100, 1101, 1400, 1401, 1700),
+                   value = c(.02, .02, 1.5, 2.5, .02, .02)),
+  shimmerDep = 2,
+  formants = NA,
+  temperature = 1e-4,
+  addSilence = 0,
+  samplingRate = 22050,
+  plot = TRUE, yScale = 'bark'
+)
+```
+
+
+## Transplant spectro-temporal envelopes
+
+For best results
+
+- Realistic source (harmonics + noise)
+
+- Transplant amplitude envelope as well
+
+- Careful with `freqWindow`
+
+- See ?soundgen::transplantSpectrum and ?soundgen::transplantEnv for more info
+
+```{r}
+s_tonal_filt = transplantFormants(
+  donor = 'ex_audio/cry_F_494.wav',
+  recipient = s_tonal,
+  samplingRate = 22050,  # must be the same as that of the donor recording
+  freqWindow = 600,  # mean(pitch, na.rm = TRUE) is a reasonable first guess
+  windowLength = 25, step = 5, dynamicRange = 120
+)
+s_tonal_filt = transplantEnv(
+  donor = 'ex_audio/cry_F_494.wav',
+  recipient = s_tonal_filt,
+  samplingRateR = 22050,
+  windowLength = 50,
+  method = 'peak'
+)
+spectrogram(s_tonal_filt, 22050, yScale = 'bark')
+```
+
+```{r echo=FALSE}
+seewave::savewav(s_tonal_filt, 22050, filename = 'ex_audio/ch_tonal.wav')
+```
+
+<audio controls> <source src="ex_audio/ch_tonal.wav"> </audio>
+
+
+
+```{r}
+s_ch_filt = transplantFormants(
+  donor = 'ex_audio/cry_F_494.wav',
+  recipient = s_ch,
+  samplingRate = 22050,  # must be the same as that of the donor recording
+  freqWindow = 600,  # mean(pitch, na.rm = TRUE) is a reasonable first guess
+  windowLength = 25, step = 5, dynamicRange = 120
+)
+s_ch_filt = transplantEnv(
+  donor = 'ex_audio/cry_F_494.wav',
+  recipient = s_ch_filt,
+  samplingRateR = 22050,
+  windowLength = 50,
+  method = 'peak'
+)
+spectrogram(s_ch_filt, 22050, yScale = 'bark')
+```
+
+```{r echo=FALSE}
+seewave::savewav(s_ch_filt, 22050, filename = 'ex_audio/ch_ch.wav')
+```
+
+<audio controls> <source src="ex_audio/ch_ch.wav"> </audio>
+
+Note an artifact of transplanting the amplitude envelope as well - the noise at 1.6 s is greatly amplified. To avoid these problems, we can ensure that the timing of our syllables is very precise (similar to the original), or just skip transplanting the amplitude envelope.
+
