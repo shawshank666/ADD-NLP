@@ -3,15 +3,16 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "${SCRIPT_DIR}/.." && pwd)
+WORKSPACE_ROOT=$(cd -- "${REPO_ROOT}/.." && pwd)
 PYTHON_SCRIPT="${REPO_ROOT}/tasks/test_analysis.py"
-DATA_ROOT="/home/xsl/Data"
-LOG_DIR="${REPO_ROOT}/results/batch_logs"
-ENV_NAME="voicedeepfake-r"
-JOBS="${JOBS:-8}"
+DATA_ROOT="${DATA_ROOT:-${WORKSPACE_ROOT}/Data}"
+RESULTS_ROOT="${REPO_ROOT}/results/NLPanalysis"
+ENV_NAME="voicedeepfake"
+JOBS="${JOBS:-24}"
 ACTIVE_BATCH_PID=""
 ACTIVE_BATCH_PGID=""
 
-mkdir -p "${LOG_DIR}"
+mkdir -p "${RESULTS_ROOT}"
 
 if ! command -v conda >/dev/null 2>&1; then
 	echo "conda not found in PATH" >&2
@@ -25,6 +26,11 @@ fi
 
 if [[ ! -f "${PYTHON_SCRIPT}" ]]; then
 	echo "Analysis script not found: ${PYTHON_SCRIPT}" >&2
+	exit 1
+fi
+
+if [[ ! -d "${DATA_ROOT}" ]]; then
+	echo "Data root not found: ${DATA_ROOT}" >&2
 	exit 1
 fi
 
@@ -56,7 +62,9 @@ run_batch() {
 	local input_dir="$2"
 	local prefix="$3"
 	local extension_filter="${4:-}"
-	local log_file="${LOG_DIR}/${prefix}_$(date +%Y%m%d-%H%M%S).log"
+	local dataset_results_dir="${RESULTS_ROOT}/${prefix}"
+	local log_dir="${dataset_results_dir}/batch_logs"
+	local log_file="${log_dir}/${prefix}_$(date +%Y%m%d-%H%M%S).log"
 	local batch_status
 
 	if [[ ! -d "${input_dir}" ]]; then
@@ -64,7 +72,10 @@ run_batch() {
 		exit 1
 	fi
 
+	mkdir -p "${log_dir}"
+
 	echo "[$(date '+%F %T')] Starting ${dataset_name}"
+	echo "[$(date '+%F %T')] Results directory: ${dataset_results_dir}"
 	echo "[$(date '+%F %T')] Log file: ${log_file}"
 	echo "[$(date '+%F %T')] Jobs: ${JOBS}"
 
@@ -76,13 +87,14 @@ run_batch() {
 			"$3"
 			--prefix "$4"
 			--jobs "$5"
+			--results-dir "$6"
 			--skip-existing
 		)
-		if [[ -n "$6" ]]; then
-			cmd+=(--extensions "$6")
+		if [[ -n "$7" ]]; then
+			cmd+=(--extensions "$7")
 		fi
-		"${cmd[@]}" 2>&1 | tee "$7"
-	' _ "${ENV_NAME}" "${PYTHON_SCRIPT}" "${input_dir}" "${prefix}" "${JOBS}" "${extension_filter}" "${log_file}" &
+		"${cmd[@]}" 2>&1 | tee "$8"
+	' _ "${ENV_NAME}" "${PYTHON_SCRIPT}" "${input_dir}" "${prefix}" "${JOBS}" "${dataset_results_dir}" "${extension_filter}" "${log_file}" &
 
 	ACTIVE_BATCH_PID=$!
 	ACTIVE_BATCH_PGID=$(ps -o pgid= "${ACTIVE_BATCH_PID}" | tr -d ' ')
@@ -103,5 +115,7 @@ run_batch() {
 	echo "[$(date '+%F %T')] Finished ${dataset_name}"
 }
 
-run_batch "LibriSpeech test-clean" "${DATA_ROOT}/LibriSpeech/test-clean" "LibriSpeech_test_clean" ".flac"
-run_batch "LibriSpeech train-clean-100" "${DATA_ROOT}/LibriSpeech/train-clean-100" "LibriSpeech_train_clean_100" ".flac"
+# run_batch "LibriSpeech test-clean" "${DATA_ROOT}/LibriSpeech/test-clean" "LibriSpeech_test_clean" ".flac"
+# run_batch "LibriSpeech train-clean-100" "${DATA_ROOT}/LibriSpeech/train-clean-100" "LibriSpeech_train_clean_100" ".flac"
+
+run_batch "TTS IMS-Toucan" "${DATA_ROOT}/TTS/IMS-Toucan" "TTS_IMS-Toucan" ".wav"

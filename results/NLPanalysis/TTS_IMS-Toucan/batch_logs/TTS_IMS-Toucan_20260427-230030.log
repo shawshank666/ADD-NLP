@@ -1,0 +1,3 @@
+Running batch analysis with 24 parallel jobs on CPU (host cores: 40).
+Rscript is not available. Activate the conda environment with R and soundgen first.
+ERROR conda.cli.main_run:execute(125): `conda run python -u /mnt/home/xiaoshilin/ADD-NLP/tasks/test_analysis.py /mnt/home/xiaoshilin/Data/TTS/IMS-Toucan --prefix TTS_IMS-Toucan --jobs 24 --results-dir /mnt/home/xiaoshilin/ADD-NLP/results/NLPanalysis/TTS_IMS-Toucan --skip-existing --extensions .wav` failed. (See above for error)

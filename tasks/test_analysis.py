@@ -330,9 +330,14 @@ def parse_extensions(text: str) -> tuple[str, ...]:
 
 
 def iter_audio_files(root: Path, suffixes: tuple[str, ...], limit: int | None) -> list[Path]:
-    files = sorted(
-        path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in suffixes
-    )
+    files: list[Path] = []
+    for current_root, _, filenames in os.walk(root, followlinks=True):
+        current_root_path = Path(current_root)
+        for filename in filenames:
+            path = current_root_path / filename
+            if path.suffix.lower() in suffixes:
+                files.append(path)
+    files.sort()
     if limit is not None:
         files = files[:limit]
     return files
@@ -894,7 +899,22 @@ def build_batch_summary_markdown(
     return "\n".join(lines) + "\n"
 
 
-def process_batch(args: argparse.Namespace, input_dir: Path, results_dir: Path) -> int:
+def resolve_batch_results_dir(
+    base_results_dir: Path,
+    batch_name: str,
+    explicit_results_dir: bool,
+) -> Path:
+    if explicit_results_dir:
+        return base_results_dir
+    return base_results_dir / "NLPanalysis" / batch_name
+
+
+def process_batch(
+    args: argparse.Namespace,
+    input_dir: Path,
+    results_dir: Path,
+    explicit_results_dir: bool,
+) -> int:
     suffixes = parse_extensions(args.extensions)
     audio_files = iter_audio_files(input_dir, suffixes=suffixes, limit=args.limit)
     if not audio_files:
@@ -903,9 +923,11 @@ def process_batch(args: argparse.Namespace, input_dir: Path, results_dir: Path) 
         )
 
     batch_name = args.prefix or input_dir.name
-    stats_csv_path = results_dir / f"{batch_name}_audio_stats.csv"
-    batch_summary_path = results_dir / f"{batch_name}_batch_summary.md"
-    detailed_root = results_dir / f"{batch_name}_details" if args.keep_detailed_files else None
+    batch_results_dir = resolve_batch_results_dir(results_dir, batch_name, explicit_results_dir)
+    batch_results_dir.mkdir(parents=True, exist_ok=True)
+    stats_csv_path = batch_results_dir / "audio_stats.csv"
+    batch_summary_path = batch_results_dir / "batch_summary.md"
+    detailed_root = batch_results_dir / "details" if args.keep_detailed_files else None
     ordered_relatives = [audio_path.relative_to(input_dir).as_posix() for audio_path in audio_files]
 
     existing_rows_by_relative: dict[str, dict[str, Any]] = {}
@@ -1068,13 +1090,14 @@ def main() -> int:
         raise SystemExit(f"Input path does not exist: {input_path}")
 
     repo_root = Path(__file__).resolve().parents[1]
+    explicit_results_dir = args.results_dir is not None
     results_dir = (
         Path(args.results_dir).expanduser().resolve() if args.results_dir else repo_root / "results"
     )
     results_dir.mkdir(parents=True, exist_ok=True)
 
     if input_path.is_dir():
-        return process_batch(args, input_path, results_dir)
+        return process_batch(args, input_path, results_dir, explicit_results_dir)
     return process_single(args, input_path, results_dir)
 
 

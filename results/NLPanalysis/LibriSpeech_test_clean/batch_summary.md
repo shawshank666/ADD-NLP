@@ -3,7 +3,7 @@
 ## Batch Info
 
 - Input directory: /home/xsl/Data/LibriSpeech/test-clean
-- Stats CSV: /home/xsl/VoiceDeepfake/results/LibriSpeech_test_clean_audio_stats.csv
+- Stats CSV: /mnt/home/xiaoshilin/ADD-NLP/results/NLPanalysis/LibriSpeech_test_clean/audio_stats.csv
 - Audio suffixes: .flac
 - Files discovered: 2620
 - Successful or reused: 2620
