@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -64,22 +65,36 @@ def parse_float(value: str) -> float | None:
     return number
 
 
+def extract_speaker_from_stem(stem: str) -> str | None:
+    normalized_stem = stem.strip()
+    if not normalized_stem:
+        return None
+
+    normalized_stem = re.sub(r"(?:[_-](?:gen|generated|anon|anonymized))+$", "", normalized_stem, flags=re.IGNORECASE)
+    match = re.match(r"^([A-Za-z0-9]+?)(?:[_-].+)?$", normalized_stem)
+    if match:
+        return match.group(1)
+    return None
+
+
 def extract_speaker_id(row: dict[str, str]) -> str:
     relative_audio = row.get("relative_audio", "")
     source_audio = row.get("source_audio", "")
 
     for audio_path in (relative_audio, source_audio):
-        normalized_path = audio_path.replace("\\", "/").strip("/")
+        normalized_path = audio_path.replace("\\", "/").strip()
         if not normalized_path:
             continue
+
+        stem_speaker = extract_speaker_from_stem(Path(normalized_path).stem)
+        if stem_speaker:
+            return stem_speaker
+
         parts = [part for part in normalized_path.split("/") if part]
-        if len(parts) >= 3:
+        if not normalized_path.startswith("/") and len(parts) >= 2:
             return parts[0]
         if parts:
-            stem = Path(parts[-1]).stem
-            if "-" in stem:
-                return stem.split("-", 1)[0]
-            return stem
+            return parts[-2] if len(parts) >= 2 else parts[-1]
 
     return "unknown"
 

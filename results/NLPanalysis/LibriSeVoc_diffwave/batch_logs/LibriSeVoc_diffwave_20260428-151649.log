@@ -1,0 +1,8 @@
+Resuming from existing stats CSV: /home/xsl/VoiceDeepfake/results/NLPanalysis/LibriSeVoc_diffwave/audio_stats.csv (916 recorded items)
+Running batch analysis with 8 parallel jobs on CPU (host cores: 16).
+[920/13201] 1355_39947_000022_000005_gen.wav
+  OK
+[924/13201] 1355_39947_000023_000001_gen.wav
+  OK
+[916/13201] 1355_39947_000021_000009_gen.wav
+  OK

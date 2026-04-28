@@ -5,10 +5,11 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "${SCRIPT_DIR}/.." && pwd)
 WORKSPACE_ROOT=$(cd -- "${REPO_ROOT}/.." && pwd)
 PYTHON_SCRIPT="${REPO_ROOT}/tasks/test_analysis.py"
+VISUALIZATION_SCRIPT="${REPO_ROOT}/tasks/visulization.py"
 DATA_ROOT="${DATA_ROOT:-${WORKSPACE_ROOT}/Data}"
 RESULTS_ROOT="${REPO_ROOT}/results/NLPanalysis"
-ENV_NAME="voicedeepfake"
-JOBS="${JOBS:-24}"
+ENV_NAME="${ENV_NAME:-voicedeepfake}"
+JOBS="${JOBS:-8}"
 ACTIVE_BATCH_PID=""
 ACTIVE_BATCH_PGID=""
 
@@ -26,6 +27,11 @@ fi
 
 if [[ ! -f "${PYTHON_SCRIPT}" ]]; then
 	echo "Analysis script not found: ${PYTHON_SCRIPT}" >&2
+	exit 1
+fi
+
+if [[ ! -f "${VISUALIZATION_SCRIPT}" ]]; then
+	echo "Visualization script not found: ${VISUALIZATION_SCRIPT}" >&2
 	exit 1
 fi
 
@@ -63,6 +69,7 @@ run_batch() {
 	local prefix="$3"
 	local extension_filter="${4:-}"
 	local dataset_results_dir="${RESULTS_ROOT}/${prefix}"
+	local stats_csv_path="${dataset_results_dir}/audio_stats.csv"
 	local log_dir="${dataset_results_dir}/batch_logs"
 	local log_file="${log_dir}/${prefix}_$(date +%Y%m%d-%H%M%S).log"
 	local batch_status
@@ -112,10 +119,20 @@ run_batch() {
 		return "${batch_status}"
 	fi
 
+	if [[ ! -f "${stats_csv_path}" ]]; then
+		echo "[$(date '+%F %T')] Stats CSV not found, skip visualization: ${stats_csv_path}" >&2
+		return 1
+	fi
+
+	echo "[$(date '+%F %T')] Starting visualization for ${dataset_name}"
+	conda run --no-capture-output -n "${ENV_NAME}" \
+		python -u "${VISUALIZATION_SCRIPT}" "${stats_csv_path}" 2>&1 | tee -a "${log_file}"
+
 	echo "[$(date '+%F %T')] Finished ${dataset_name}"
 }
 
 # run_batch "LibriSpeech test-clean" "${DATA_ROOT}/LibriSpeech/test-clean" "LibriSpeech_test_clean" ".flac"
 # run_batch "LibriSpeech train-clean-100" "${DATA_ROOT}/LibriSpeech/train-clean-100" "LibriSpeech_train_clean_100" ".flac"
 
-run_batch "TTS IMS-Toucan" "${DATA_ROOT}/TTS/IMS-Toucan" "TTS_IMS-Toucan" ".wav"
+# run_batch "TTS IMS-Toucan" "${DATA_ROOT}/TTS/IMS-Toucan" "TTS_IMS-Toucan" ".wav"
+run_batch "LibriSeVoc diffwave" "${DATA_ROOT}/LibriSeVoc/diffwave" "LibriSeVoc_diffwave" ".wav"
