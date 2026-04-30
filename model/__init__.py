@@ -1,0 +1,1 @@
+from .feature_classifier import DeepfakeFeatureClassifier

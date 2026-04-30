@@ -1089,7 +1089,7 @@ def main() -> int:
     if not input_path.exists():
         raise SystemExit(f"Input path does not exist: {input_path}")
 
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     explicit_results_dir = args.results_dir is not None
     results_dir = (
         Path(args.results_dir).expanduser().resolve() if args.results_dir else repo_root / "results"

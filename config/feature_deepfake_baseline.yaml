@@ -1,0 +1,93 @@
+seed: 3407
+run_test_after_fit: true
+
+data:
+  train_csv: /home/xsl/VoiceDeepfake/results/NLPanalysis/manifest/train_manifest.csv
+  val_csv: null
+  test_csv: null
+  predict_csv: null
+  label_column: label
+  split_column: split
+  train_split: train
+  val_split: val
+  test_split: test
+  features:
+    - frame_subharmonics_ratio
+    - frame_sidebands_ratio
+    - frame_chaos_ratio
+    - frame_frequency_jump_ratio
+    - subharmonics_candidate_count
+    - sidebands_candidate_count
+    - chaos_candidate_count
+    - frequency_jump_candidate_count
+    - voiced_frame_ratio
+    - mean_pitch_voiced
+    - mean_amEnvDep
+    - mean_amMsPurity
+    - mean_HNR
+    - mean_roughness
+    - mean_entropy
+    - mean_subDep
+    - median_pitch_voiced
+    - median_amEnvDep
+    - median_amMsPurity
+    - median_HNR
+    - median_roughness
+    - median_entropy
+    - median_subDep
+  use_default_feature_set: true
+  positive_labels: [fake, deepfake, spoof, 1]
+  negative_labels: [real, bonafide, genuine, 0]
+  batch_size: 128
+  num_workers: 4
+  drop_last: false
+  pin_memory: true
+  persistent_workers: true
+  fill_value: 0.0
+
+model:
+  hidden_dims: [128, 64]
+  dropout: 0.2
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  loss_name: focal
+  focal_gamma: 2.0
+  focal_alpha: 0.25
+  pos_weight: auto
+  scheduler_name: plateau
+  scheduler_t_max: 20
+  scheduler_patience: 5
+  scheduler_factor: 0.5
+
+trainer:
+  accelerator: auto
+  devices: 1
+  max_epochs: 50
+  precision: 32
+  gradient_clip_val: 1.0
+  deterministic: true
+  log_every_n_steps: 10
+  check_val_every_n_epoch: 1
+  enable_progress_bar: true
+  fast_dev_run: false
+
+logging:
+  save_dir: /home/xsl/VoiceDeepfake/results/feature_classifier
+  experiment_name: baseline_subharm_sideband
+  version: null
+
+callbacks:
+  early_stopping:
+    enabled: true
+    monitor: val/loss
+    mode: min
+    patience: 8
+    min_delta: 0.0
+  checkpoint:
+    enabled: true
+    monitor: val/loss
+    mode: min
+    save_top_k: 1
+    save_last: true
+  lr_monitor:
+    enabled: true
