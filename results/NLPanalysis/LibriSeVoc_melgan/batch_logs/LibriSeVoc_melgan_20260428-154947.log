@@ -1,0 +1,13 @@
+Running batch analysis with 8 parallel jobs on CPU (host cores: 64).
+[2/13201] 1034_121119_000010_000004_gen.wav
+  FAILED: R analysis failed: Error in readBin(con, int, n = 4, size = 1, endian = "little", signed = FALSE) %*%  : 
+  non-conformable arguments
+Warning in min(x, na.rm = na.rm) :
+  no non-missing arguments to min; returning Inf
+Warning in max(x, na.rm = na.rm) :
+  no non-missing arguments to max; returning -Inf
+Warning in processAudio(x, samplingRate = samplingRate, scale = scale, from = from,  :
+  Failed to process the input
+Error in analyze(input_path, windowLength = window_length, step = step_size,  : 
+  Failed to analyze any input
+Execution halted

@@ -1,0 +1,26 @@
+Running batch analysis with 24 parallel jobs on CPU (host cores: 64).
+[18/13201] 1040_133433_000055_000000_gen.wav
+  FAILED: R analysis failed: 错误: package or namespace load failed for ‘soundgen’ in dyn.load(file, DLLpath = DLLpath, ...):
+ 无法载入共享目标对象‘/mnt/home/xiaoshilin/.conda/envs/voicedeepfake/lib/R/library/sass/libs/sass.so’：:
+  /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.33' not found (required by /mnt/home/xiaoshilin/.conda/envs/voicedeepfake/lib/R/library/sass/libs/sass.so)
+停止执行
+[21/13201] 1040_133433_000065_000001_gen.wav
+  FAILED: R analysis failed: 错误: package or namespace load failed for ‘soundgen’ in dyn.load(file, DLLpath = DLLpath, ...):
+ 无法载入共享目标对象‘/mnt/home/xiaoshilin/.conda/envs/voicedeepfake/lib/R/library/sass/libs/sass.so’：:
+  /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.33' not found (required by /mnt/home/xiaoshilin/.conda/envs/voicedeepfake/lib/R/library/sass/libs/sass.so)
+停止执行
+[8/13201] 103_1241_000004_000002_gen.wav
+  FAILED: R analysis failed: 错误: package or namespace load failed for ‘soundgen’ in dyn.load(file, DLLpath = DLLpath, ...):
+ 无法载入共享目标对象‘/mnt/home/xiaoshilin/.conda/envs/voicedeepfake/lib/R/library/sass/libs/sass.so’：:
+  /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.33' not found (required by /mnt/home/xiaoshilin/.conda/envs/voicedeepfake/lib/R/library/sass/libs/sass.so)
+停止执行
+[13/13201] 103_1241_000034_000005_gen.wav
+  FAILED: R analysis failed: 错误: package or namespace load failed for ‘soundgen’ in dyn.load(file, DLLpath = DLLpath, ...):
+ 无法载入共享目标对象‘/mnt/home/xiaoshilin/.conda/envs/voicedeepfake/lib/R/library/sass/libs/sass.so’：:
+  /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.33' not found (required by /mnt/home/xiaoshilin/.conda/envs/voicedeepfake/lib/R/library/sass/libs/sass.so)
+停止执行
+[5/13201] 1034_121119_000040_000001_gen.wav
+  FAILED: R analysis failed: 错误: package or namespace load failed for ‘soundgen’ in dyn.load(file, DLLpath = DLLpath, ...):
+ 无法载入共享目标对象‘/mnt/home/xiaoshilin/.conda/envs/voicedeepfake/lib/R/library/sass/libs/sass.so’：:
+  /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.33' not found (required by /mnt/home/xiaoshilin/.conda/envs/voicedeepfake/lib/R/library/sass/libs/sass.so)
+停止执行

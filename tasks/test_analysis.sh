@@ -2,10 +2,10 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-REPO_ROOT=$(cd -- "${SCRIPT_DIR}/.." && pwd)
+REPO_ROOT=$(cd -- "${SCRIPT_DIR}/../.." && pwd)
 WORKSPACE_ROOT=$(cd -- "${REPO_ROOT}/.." && pwd)
-PYTHON_SCRIPT="${REPO_ROOT}/tasks/test_analysis.py"
-VISUALIZATION_SCRIPT="${REPO_ROOT}/tasks/visulization.py"
+PYTHON_SCRIPT="${REPO_ROOT}/tasks/NLPanalysis/test_analysis.py"
+VISUALIZATION_SCRIPT="${REPO_ROOT}/tasks/NLPanalysis/visulization.py"
 DATA_ROOT="${DATA_ROOT:-${WORKSPACE_ROOT}/Data}"
 RESULTS_ROOT="${REPO_ROOT}/results/NLPanalysis"
 ENV_NAME="${ENV_NAME:-voicedeepfake}"
@@ -135,4 +135,8 @@ run_batch() {
 # run_batch "LibriSpeech train-clean-100" "${DATA_ROOT}/LibriSpeech/train-clean-100" "LibriSpeech_train_clean_100" ".flac"
 
 # run_batch "TTS IMS-Toucan" "${DATA_ROOT}/TTS/IMS-Toucan" "TTS_IMS-Toucan" ".wav"
-run_batch "LibriSeVoc diffwave" "${DATA_ROOT}/LibriSeVoc/diffwave" "LibriSeVoc_diffwave" ".wav"
+# run_batch "LibriSeVoc melgan" "${DATA_ROOT}/LibriSeVoc/melgan" "LibriSeVoc_melgan" ".wav"
+# run_batch "LibriTTS train-clean-100" "${DATA_ROOT}/LibriTTS/LibriTTS/train-clean-100" "LibriTTS_train_clean_100" ".wav"
+# run_batch "LibriSeVoc wavernn" "${DATA_ROOT}/LibriSeVoc/wavernn" "LibriSeVoc_wavernn" ".wav"
+# run_batch "LibriSeVoc melgan" "${DATA_ROOT}/LibriSeVoc/melgan" "LibriSeVoc_melgan" ".wav"
+run_batch "LibriSeVoc parallel_wave_gan" "${DATA_ROOT}/LibriSeVoc/parallel_wave_gan" "LibriSeVoc_parallel_wave_gan" ".wav"
